@@ -104,11 +104,14 @@ model Category {
 }
 
 model Conversation {
-  id        String         @id @default(cuid())
-  title     String         @default("Nova conversa")
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
-  messages  CoachMessage[]
+  id            String         @id @default(cuid())
+  title         String         @default("Nova conversa")
+  // When this conversation is bound to a WhatsApp phone (Evolution API),
+  // every WA message from that phone lands here. Null for browser chats.
+  whatsappPhone String?        @unique
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  messages      CoachMessage[]
 
   @@index([updatedAt])
 }

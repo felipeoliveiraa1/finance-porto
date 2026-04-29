@@ -1,6 +1,7 @@
 import { NextResponse, after } from "next/server";
 import { db } from "@/lib/db";
 import { syncSingleItem } from "@/lib/sync";
+import { broadcastWhatsapp, parseReportPhones, isWhatsappConfigured } from "@/lib/whatsapp";
 
 // Pluggy retries 5xx but expects ack within ~30s. We respond fast (200),
 // then run the actual sync in the background via `after()` — which keeps
@@ -72,10 +73,44 @@ export async function POST(req: Request) {
     after(async () => {
       const start = Date.now();
       try {
+        // Capture which transaction IDs existed BEFORE the sync so we can
+        // detect which ones are new and notify.
+        const before = await db.transaction.findMany({
+          where: { account: { itemId } },
+          select: { id: true },
+        });
+        const beforeIds = new Set(before.map((t) => t.id));
+
         const result = await syncSingleItem(itemId);
+
+        const after = await db.transaction.findMany({
+          where: {
+            account: { itemId },
+            id: { notIn: [...beforeIds] },
+          },
+          orderBy: { date: "desc" },
+          take: 5,
+          include: { account: { select: { name: true, item: { select: { connectorName: true } } } } },
+        });
+
         console.log(
-          `[webhook] sync ok itemId=${itemId} accounts=${result.accounts} transactions=${result.transactions} (${Date.now() - start}ms)`,
+          `[webhook] sync ok itemId=${itemId} accounts=${result.accounts} transactions=${result.transactions} new=${after.length} (${Date.now() - start}ms)`,
         );
+
+        // Notify via WhatsApp on each genuinely new transaction.
+        if (after.length > 0 && isWhatsappConfigured()) {
+          const phones = parseReportPhones();
+          if (phones.length > 0) {
+            for (const tx of after) {
+              const fmt = (v: number) =>
+                v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+              const arrow = tx.type === "DEBIT" ? "💸" : "💰";
+              const sign = tx.type === "DEBIT" ? "-" : "+";
+              const msg = `${arrow} *${sign}${fmt(tx.amount)}* — ${tx.description.slice(0, 50)}\n${tx.account.item.connectorName} · ${tx.account.name.trim()}`;
+              await broadcastWhatsapp(phones, msg);
+            }
+          }
+        }
       } catch (err) {
         console.error(
           `[webhook] sync FAILED itemId=${itemId} (${Date.now() - start}ms)`,
