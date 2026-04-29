@@ -4,8 +4,9 @@ import { NextResponse, type NextRequest } from "next/server";
 // Public routes that don't require authentication.
 const PUBLIC_PATHS = ["/login", "/auth/callback"];
 
-// API routes that authenticate by themselves (e.g. webhooks signed with a shared secret).
-const PUBLIC_API_PREFIXES = ["/api/webhooks/"];
+// API routes that authenticate by themselves (e.g. webhooks signed with a shared secret,
+// cron jobs that check CRON_SECRET internally). Bypass the Supabase session check.
+const PUBLIC_API_PREFIXES = ["/api/webhooks/", "/api/cron/"];
 
 export async function middleware(request: NextRequest) {
   const url = request.nextUrl;
@@ -76,5 +77,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/webhooks).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/cron).*)"],
 };
