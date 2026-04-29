@@ -8,6 +8,7 @@ import {
   Receipt,
   AlertTriangle,
   Crown,
+  X,
 } from "lucide-react";
 import { KpiCard } from "@/components/kpi-card";
 import { SectionCard } from "@/components/section-card";
@@ -20,6 +21,7 @@ import {
   BankBreakdown,
 } from "@/components/charts";
 import { hasPluggyCredentials } from "@/lib/pluggy";
+import { LayoutGrid } from "lucide-react";
 import {
   getOverview,
   getRecentTransactions,
@@ -33,10 +35,11 @@ import {
 } from "@/lib/queries";
 import { formatBRL, formatDateShort, formatRelative } from "@/lib/format";
 import { DateRangeFilter } from "@/components/date-range-filter";
+import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = Promise<{ from?: string; to?: string }>;
+type SearchParams = Promise<{ from?: string; to?: string; accountId?: string }>;
 
 const parseRangeBoundary = (iso: string | undefined, isEndOfDay: boolean): Date | undefined => {
   if (!iso) return undefined;
@@ -73,12 +76,26 @@ const periodTitle = (period: string) => {
   return "Período selecionado";
 };
 
+const buildHref = (
+  current: { from?: string; to?: string; accountId?: string },
+  overrides: { from?: string; to?: string; accountId?: string },
+) => {
+  const merged = { ...current, ...overrides };
+  const query: Record<string, string> = {};
+  for (const [k, v] of Object.entries(merged)) {
+    if (v) query[k] = v;
+  }
+  return { pathname: "/", query } as const;
+};
+
 export default async function DashboardPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
   const credsOk = hasPluggyCredentials();
-  const range = {
+  const accountId = params.accountId || undefined;
+  const filter = {
     from: parseRangeBoundary(params.from, false),
     to: parseRangeBoundary(params.to, true),
+    accountId,
   };
   const period = periodLabel(params.from, params.to);
 
@@ -93,16 +110,20 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
     cards,
     lastSync,
   ] = await Promise.all([
-    getOverview(range),
+    getOverview(filter),
     getRecentTransactions(8),
-    getSpendByCategory(range),
-    getSpendByBank(range),
-    getDailySpendSeries(params.from || params.to ? range : { days: 30 }),
-    getMonthlyCashflowSeries(12),
-    getTopMerchants(5, range),
+    getSpendByCategory(filter),
+    getSpendByBank(filter),
+    getDailySpendSeries(
+      params.from || params.to ? { ...filter } : { days: 30, accountId },
+    ),
+    getMonthlyCashflowSeries(12, accountId),
+    getTopMerchants(5, filter),
     getCreditCardUsage(),
     getLastSync(),
   ]);
+
+  const selectedCard = accountId ? cards.find((c) => c.id === accountId) : null;
 
   const spendDelta =
     ov.prevMonthSpend > 0 ? ((ov.monthSpend - ov.prevMonthSpend) / ov.prevMonthSpend) * 100 : null;
@@ -138,6 +159,68 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
           <SyncButton />
         </div>
       </header>
+
+      {cards.length > 0 && (
+        <section className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Filtrar por cartão
+            </p>
+            {selectedCard && (
+              <Link
+                href={buildHref(params, { accountId: undefined })}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+                Limpar filtro
+              </Link>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <Link
+              href={buildHref(params, { accountId: undefined })}
+              className={cn(
+                "group flex aspect-[1.586/1] flex-col items-center justify-center overflow-hidden rounded-xl glass top-highlight border-gradient transition-all duration-200",
+                !accountId
+                  ? "ring-2 ring-primary shadow-[0_0_30px_rgba(79,140,255,0.4)]"
+                  : "opacity-75 hover:opacity-100",
+              )}
+            >
+              <LayoutGrid className="h-5 w-5 text-primary" />
+              <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground">
+                Todos
+              </p>
+            </Link>
+            {cards.map((c) => (
+              <Link
+                key={c.id}
+                href={buildHref(params, { accountId: c.id })}
+                className={cn(
+                  "transition-all duration-200 rounded-xl",
+                  c.id === accountId
+                    ? "ring-2 ring-primary shadow-[0_0_30px_rgba(79,140,255,0.4)]"
+                    : "opacity-65 hover:opacity-100",
+                )}
+              >
+                <CreditCardVisual
+                  cardName={c.name}
+                  bankConnectorName={c.bank}
+                  number={c.number}
+                  owner={c.owner}
+                  compact
+                />
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {selectedCard && (
+        <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-2.5 text-xs text-muted-foreground">
+          Filtrando por <span className="font-semibold text-foreground">{selectedCard.name.trim()}</span>{" "}
+          ({selectedCard.bank}) — todos os KPIs e gráficos abaixo respeitam essa seleção.
+        </div>
+      )}
 
       {!credsOk && (
         <div className="flex items-start gap-3 rounded-xl border border-warning/30 bg-warning/10 p-4 text-sm">

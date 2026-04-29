@@ -184,8 +184,12 @@ export function previousRange(range: DateRange): DateRange {
   return { from: prevFrom, to: prevTo };
 }
 
-export async function getOverview(range?: Partial<DateRange>) {
+type Filter = Partial<DateRange> & { accountId?: string };
+
+export async function getOverview(filter?: Filter) {
+  const accountWhere = filter?.accountId ? { id: filter.accountId } : {};
   const accounts = await db.account.findMany({
+    where: accountWhere,
     select: {
       id: true,
       type: true,
@@ -201,7 +205,6 @@ export async function getOverview(range?: Partial<DateRange>) {
     .filter((a) => a.type === "BANK")
     .reduce((sum, a) => sum + a.balance, 0);
 
-  // For credit cards: compute "fatura atual em aberto" by subtracting future installments from balance.
   const openBills = await computeOpenBills();
   const creditUsed = accounts
     .filter((a) => a.type === "CREDIT")
@@ -211,24 +214,25 @@ export async function getOverview(range?: Partial<DateRange>) {
     .filter((a) => a.type === "CREDIT")
     .reduce((sum, a) => sum + (a.availableCreditLimit ?? 0), 0);
 
-  const r = resolveRange(range);
+  const r = resolveRange(filter);
   const prev = previousRange(r);
+  const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
 
   const [periodDebits, prevPeriodDebits, periodCredits, prevPeriodCredits] = await Promise.all([
     db.transaction.findMany({
-      where: { date: { gte: r.from, lte: r.to }, type: "DEBIT" },
+      where: { ...accountFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
       select: { amount: true },
     }),
     db.transaction.findMany({
-      where: { date: { gte: prev.from, lte: prev.to }, type: "DEBIT" },
+      where: { ...accountFilter, date: { gte: prev.from, lte: prev.to }, type: "DEBIT" },
       select: { amount: true },
     }),
     db.transaction.findMany({
-      where: { date: { gte: r.from, lte: r.to }, type: "CREDIT" },
+      where: { ...accountFilter, date: { gte: r.from, lte: r.to }, type: "CREDIT" },
       select: { amount: true },
     }),
     db.transaction.findMany({
-      where: { date: { gte: prev.from, lte: prev.to }, type: "CREDIT" },
+      where: { ...accountFilter, date: { gte: prev.from, lte: prev.to }, type: "CREDIT" },
       select: { amount: true },
     }),
   ]);
@@ -275,10 +279,11 @@ export async function getRecentTransactions(limit = 10) {
   });
 }
 
-export async function getSpendByCategory(range?: Partial<DateRange>) {
-  const r = resolveRange(range);
+export async function getSpendByCategory(filter?: Filter) {
+  const r = resolveRange(filter);
+  const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
   const txs = await db.transaction.findMany({
-    where: { date: { gte: r.from, lte: r.to }, type: "DEBIT" },
+    where: { ...accountFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
     select: {
       amount: true,
       pluggyCategory: true,
@@ -301,10 +306,11 @@ export async function getSpendByCategory(range?: Partial<DateRange>) {
   return [...byCat.values()].sort((a, b) => b.total - a.total);
 }
 
-export async function getSpendByBank(range?: Partial<DateRange>) {
-  const r = resolveRange(range);
+export async function getSpendByBank(filter?: Filter) {
+  const r = resolveRange(filter);
+  const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
   const txs = await db.transaction.findMany({
-    where: { date: { gte: r.from, lte: r.to }, type: "DEBIT" },
+    where: { ...accountFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
     select: {
       amount: true,
       account: {
@@ -331,7 +337,9 @@ export async function getSpendByBank(range?: Partial<DateRange>) {
   return [...byBank.values()].sort((a, b) => b.total - a.total);
 }
 
-export async function getDailySpendSeries(opts?: { days?: number } & Partial<DateRange>) {
+export async function getDailySpendSeries(
+  opts?: { days?: number; accountId?: string } & Partial<DateRange>,
+) {
   let start: Date;
   let end: Date;
   if (opts?.from || opts?.to) {
@@ -347,8 +355,9 @@ export async function getDailySpendSeries(opts?: { days?: number } & Partial<Dat
     start.setDate(start.getDate() - days);
     start.setHours(0, 0, 0, 0);
   }
+  const accountFilter = opts?.accountId ? { accountId: opts.accountId } : {};
   const txs = await db.transaction.findMany({
-    where: { date: { gte: start, lte: end }, type: "DEBIT" },
+    where: { ...accountFilter, date: { gte: start, lte: end }, type: "DEBIT" },
     select: { amount: true, date: true },
     orderBy: { date: "asc" },
   });
@@ -366,10 +375,11 @@ export async function getDailySpendSeries(opts?: { days?: number } & Partial<Dat
   return [...byDay.entries()].map(([date, amount]) => ({ date, amount }));
 }
 
-export async function getMonthlyCashflowSeries(months = 12) {
+export async function getMonthlyCashflowSeries(months = 12, accountId?: string) {
   const start = startOfMonthsAgo(months - 1);
+  const accountFilter = accountId ? { accountId } : {};
   const txs = await db.transaction.findMany({
-    where: { date: { gte: start } },
+    where: { ...accountFilter, date: { gte: start } },
     select: { amount: true, date: true, type: true },
   });
   const series: { month: string; income: number; expense: number; net: number }[] = [];
@@ -393,10 +403,11 @@ export async function getMonthlyCashflowSeries(months = 12) {
   return series;
 }
 
-export async function getTopMerchants(limit = 5, range?: Partial<DateRange>) {
-  const r = resolveRange(range);
+export async function getTopMerchants(limit = 5, filter?: Filter) {
+  const r = resolveRange(filter);
+  const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
   const txs = await db.transaction.findMany({
-    where: { date: { gte: r.from, lte: r.to }, type: "DEBIT" },
+    where: { ...accountFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
     select: { amount: true, merchantName: true, description: true },
   });
   const byMerchant = new Map<string, { name: string; total: number; count: number }>();
