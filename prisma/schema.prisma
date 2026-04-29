@@ -103,6 +103,34 @@ model Category {
   updatedAt DateTime @updatedAt
 }
 
+model Conversation {
+  id        String         @id @default(cuid())
+  title     String         @default("Nova conversa")
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  messages  CoachMessage[]
+
+  @@index([updatedAt])
+}
+
+model CoachMessage {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String       // "user" | "assistant"
+  content        String
+  // JSON-encoded list of tool calls used to produce this message:
+  // [{ name: string, durationMs: number, ok: boolean }, ...]
+  toolCallsJson  String?
+  // OpenAI usage for this turn
+  promptTokens   Int?
+  completionTokens Int?
+  cachedPromptTokens Int?
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
 model SyncLog {
   id                String    @id @default(cuid())
   itemId            String?
