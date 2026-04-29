@@ -1,0 +1,119 @@
+// finance-porto schema
+// Mirrors Pluggy Data API entities (Item, Account, Transaction)
+// plus user-side models (Category, SyncLog).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Item {
+  id                    String    @id
+  connectorId           Int
+  connectorName         String
+  connectorImageUrl     String?
+  connectorPrimaryColor String?
+  status                String
+  executionStatus       String?
+  statusDetail          String?
+  pluggyCreatedAt       DateTime?
+  pluggyUpdatedAt       DateTime?
+  lastUpdatedAt         DateTime?
+  consentExpiresAt      DateTime?
+
+  accounts Account[]
+  syncLogs SyncLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                   String  @id
+  itemId               String
+  item                 Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  type                 String
+  subtype              String
+  name                 String
+  marketingName        String?
+  number               String?
+  balance              Float
+  currencyCode         String  @default("BRL")
+  owner                String?
+  taxNumber            String?
+  creditLimit          Float?
+  availableCreditLimit Float?
+  // Current open credit-card bill (CREDIT accounts only). Source: pluggy.fetchCreditCardBills
+  currentBillAmount    Float?
+  currentBillDueDate   DateTime?
+  currentBillMinimum   Float?
+
+  transactions Transaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([itemId])
+}
+
+model Transaction {
+  id                      String   @id
+  accountId               String
+  account                 Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  type                    String
+  description             String
+  descriptionRaw          String?
+  amount                  Float
+  amountInAccountCurrency Float?
+  currencyCode            String   @default("BRL")
+  date                    DateTime
+  balance                 Float?
+  pluggyCategory          String?
+  pluggyCategoryId        String?
+  merchantName            String?
+  paymentDataJson         String?
+  providerCode            String?
+
+  userCategoryId String?
+  userCategory   Category? @relation(fields: [userCategoryId], references: [id])
+  notes          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId, date])
+  @@index([date])
+  @@index([userCategoryId])
+}
+
+model Category {
+  id           String  @id @default(cuid())
+  name         String  @unique
+  emoji        String?
+  color        String?
+  monthlyLimit Float?
+
+  transactions Transaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SyncLog {
+  id                String    @id @default(cuid())
+  itemId            String?
+  item              Item?     @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  startedAt         DateTime  @default(now())
+  finishedAt        DateTime?
+  status            String
+  itemsCount        Int       @default(0)
+  accountsCount     Int       @default(0)
+  transactionsCount Int       @default(0)
+  errorMessage      String?
+
+  @@index([startedAt])
+}

@@ -1,65 +1,483 @@
-import Image from "next/image";
+import Link from "next/link";
+import {
+  Wallet,
+  CreditCard,
+  ArrowDownRight,
+  ArrowUpRight,
+  TrendingUp,
+  Receipt,
+  AlertTriangle,
+  Crown,
+} from "lucide-react";
+import { KpiCard } from "@/components/kpi-card";
+import { SectionCard } from "@/components/section-card";
+import { SyncButton } from "@/components/sync-button";
+import { CreditCardVisual } from "@/components/credit-card-visual";
+import {
+  DailySpendChart,
+  CashflowChart,
+  CategoryDonut,
+  BankBreakdown,
+} from "@/components/charts";
+import { hasPluggyCredentials } from "@/lib/pluggy";
+import {
+  getOverview,
+  getRecentTransactions,
+  getSpendByCategory,
+  getSpendByBank,
+  getDailySpendSeries,
+  getMonthlyCashflowSeries,
+  getTopMerchants,
+  getCreditCardUsage,
+  getLastSync,
+} from "@/lib/queries";
+import { formatBRL, formatDateShort, formatRelative } from "@/lib/format";
+import { DateRangeFilter } from "@/components/date-range-filter";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+type SearchParams = Promise<{ from?: string; to?: string }>;
+
+const parseRangeBoundary = (iso: string | undefined, isEndOfDay: boolean): Date | undefined => {
+  if (!iso) return undefined;
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return undefined;
+  return new Date(
+    Date.UTC(
+      Number(m[1]),
+      Number(m[2]) - 1,
+      Number(m[3]),
+      isEndOfDay ? 23 : 0,
+      isEndOfDay ? 59 : 0,
+      isEndOfDay ? 59 : 0,
+      isEndOfDay ? 999 : 0,
+    ),
+  );
+};
+
+const periodLabel = (fromIso?: string, toIso?: string) => {
+  if (!fromIso && !toIso) return "neste mês";
+  if (!fromIso) return `até ${toIso}`;
+  if (!toIso) return `desde ${fromIso}`;
+  // Try to detect common presets via their from/to shape
+  const today = new Date();
+  const isoDay = (d: Date) => d.toISOString().slice(0, 10);
+  if (fromIso === isoDay(today) && toIso === isoDay(today)) return "hoje";
+  return "no período";
+};
+
+const periodTitle = (period: string) => {
+  if (period === "neste mês") return "Mês corrente";
+  if (period === "hoje") return "Hoje";
+  if (period.startsWith("até ") || period.startsWith("desde ")) return period;
+  return "Período selecionado";
+};
+
+export default async function DashboardPage({ searchParams }: { searchParams: SearchParams }) {
+  const params = await searchParams;
+  const credsOk = hasPluggyCredentials();
+  const range = {
+    from: parseRangeBoundary(params.from, false),
+    to: parseRangeBoundary(params.to, true),
+  };
+  const period = periodLabel(params.from, params.to);
+
+  const [
+    ov,
+    recent,
+    byCat,
+    byBank,
+    daily,
+    cashflow,
+    merchants,
+    cards,
+    lastSync,
+  ] = await Promise.all([
+    getOverview(range),
+    getRecentTransactions(8),
+    getSpendByCategory(range),
+    getSpendByBank(range),
+    getDailySpendSeries(params.from || params.to ? range : { days: 30 }),
+    getMonthlyCashflowSeries(12),
+    getTopMerchants(5, range),
+    getCreditCardUsage(),
+    getLastSync(),
+  ]);
+
+  const spendDelta =
+    ov.prevMonthSpend > 0 ? ((ov.monthSpend - ov.prevMonthSpend) / ov.prevMonthSpend) * 100 : null;
+  const incomeDelta =
+    ov.prevMonthIncome > 0 ? ((ov.monthIncome - ov.prevMonthIncome) / ov.prevMonthIncome) * 100 : null;
+  const netDelta =
+    ov.prevNetCashflow !== 0
+      ? ((ov.netCashflow - ov.prevNetCashflow) / Math.abs(ov.prevNetCashflow)) * 100
+      : null;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <div className="space-y-6">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="mb-1 inline-flex items-center gap-2 rounded-full border border-success/30 bg-success/10 px-2.5 py-1 text-[11px] font-medium text-success">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-success" />
+            </span>
+            {ov.accountsCount} contas conectadas · live
+          </p>
+          <h1 className="text-3xl font-semibold tracking-tight">
+            <span className="text-gradient-primary">Bem-vindo de volta</span>
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            {lastSync?.finishedAt
+              ? `Última sincronização ${formatRelative(lastSync.finishedAt)}`
+              : "Ainda não sincronizado"}
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <div className="flex flex-wrap items-center gap-2">
+          <DateRangeFilter from={params.from} to={params.to} />
+          <SyncButton />
         </div>
-      </main>
+      </header>
+
+      {!credsOk && (
+        <div className="flex items-start gap-3 rounded-xl border border-warning/30 bg-warning/10 p-4 text-sm">
+          <AlertTriangle className="mt-0.5 h-5 w-5 text-warning" />
+          <div>
+            <p className="font-medium text-foreground">Credenciais Pluggy ausentes</p>
+            <p className="text-muted-foreground">
+              Configure <code className="text-foreground">PLUGGY_CLIENT_ID</code> e{" "}
+              <code className="text-foreground">PLUGGY_CLIENT_SECRET</code> no <code>.env</code>.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiCard
+          icon={<Wallet className="h-4 w-4" />}
+          label="Saldo total"
+          value={formatBRL(ov.bankBalance)}
+          tone="success"
+          hint={`em ${ov.accountsCount > 0 ? cards.length + " cartões + " : ""}contas correntes`}
+        />
+        <KpiCard
+          icon={<CreditCard className="h-4 w-4" />}
+          label="Cartões usados"
+          value={formatBRL(ov.creditUsed)}
+          tone={ov.creditUsed > 0 ? "warning" : "muted"}
+          hint={
+            ov.creditAvailable > 0
+              ? `${formatBRL(ov.creditAvailable)} disponíveis`
+              : undefined
+          }
+        />
+        <KpiCard
+          icon={<ArrowDownRight className="h-4 w-4" />}
+          label={`Gastos ${period}`}
+          value={formatBRL(ov.monthSpend)}
+          delta={spendDelta}
+          tone="danger"
+          invertDelta
+        />
+        <KpiCard
+          icon={<ArrowUpRight className="h-4 w-4" />}
+          label={`Entradas ${period}`}
+          value={formatBRL(ov.monthIncome)}
+          delta={incomeDelta}
+          tone="success"
+        />
+      </section>
+
+      <section className="grid gap-4 sm:grid-cols-3">
+        <KpiCard
+          icon={<TrendingUp className="h-4 w-4" />}
+          label={`Saldo ${period}`}
+          value={formatBRL(ov.netCashflow)}
+          delta={netDelta}
+          tone={ov.netCashflow >= 0 ? "success" : "danger"}
+          hint="entradas − saídas"
+        />
+        <KpiCard
+          icon={<Receipt className="h-4 w-4" />}
+          label="Ticket médio"
+          value={formatBRL(ov.avgTicket)}
+          tone="primary"
+          hint={`${ov.monthTxCount} transações ${period}`}
+        />
+        <KpiCard
+          icon={<Crown className="h-4 w-4" />}
+          label="Maior gasto único"
+          value={formatBRL(ov.biggestSpend)}
+          tone="purple"
+          hint={period}
+        />
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <SectionCard
+          className="lg:col-span-2"
+          title="Gastos diários"
+          description={params.from || params.to ? "Período selecionado" : "Últimos 30 dias"}
+          action={
+            <span className="rounded-md bg-secondary px-2 py-1 text-[11px] font-medium text-muted-foreground">
+              {params.from || params.to ? "Personalizado" : "30d"}
+            </span>
+          }
+        >
+          <DailySpendChart data={daily} />
+        </SectionCard>
+
+        <SectionCard title="Por categoria" description={periodTitle(period)}>
+          {byCat.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              Sem gastos no período
+            </p>
+          ) : (
+            <CategoryDonut data={byCat} />
+          )}
+        </SectionCard>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <SectionCard
+          className="lg:col-span-2"
+          title="Cashflow"
+          description="Entradas vs saídas (12 meses)"
+          action={
+            <div className="flex items-center gap-3 text-[11px]">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <span className="h-2 w-2 rounded-full bg-success" /> Entradas
+              </span>
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <span className="h-2 w-2 rounded-full bg-destructive" /> Saídas
+              </span>
+            </div>
+          }
+        >
+          <CashflowChart data={cashflow} />
+        </SectionCard>
+
+        <SectionCard title="Top estabelecimentos" description={periodTitle(period)}>
+          {merchants.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              Sem dados ainda
+            </p>
+          ) : (
+            <ul className="space-y-3">
+              {merchants.map((m, i) => (
+                <li key={m.name} className="flex items-center gap-3">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-secondary text-xs font-semibold text-muted-foreground">
+                    {i + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{m.name}</p>
+                    <p className="text-xs text-muted-foreground">{m.count} transações</p>
+                  </div>
+                  <span className="text-sm font-semibold tabular-nums text-foreground">
+                    {formatBRL(m.total)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+      </section>
+
+      {cards.length > 0 && (
+        <SectionCard
+          title="Cartões de crédito"
+          description="Fatura atual aberta · próximo vencimento"
+        >
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {cards.map((c) => {
+              const noBreakdown = c.method === "BALANCE_ONLY";
+              const methodLabel =
+                c.method === "FUTURE_TXS"
+                  ? "exato"
+                  : c.method === "DESCRIPTION_PARSE"
+                    ? "estimado"
+                    : c.method === "CYCLE_DATE"
+                      ? "ciclo"
+                      : "limitado";
+              const methodBadgeClass =
+                c.method === "FUTURE_TXS"
+                  ? "bg-success/15 text-success"
+                  : c.method === "DESCRIPTION_PARSE"
+                    ? "bg-primary/15 text-primary"
+                    : c.method === "CYCLE_DATE"
+                      ? "bg-[rgb(178,100,255)]/15 text-[rgb(178,100,255)]"
+                      : "bg-warning/15 text-warning";
+              return (
+                <div
+                  key={c.id}
+                  className="relative overflow-hidden rounded-2xl glass top-highlight p-4 transition-colors hover:bg-elevated"
+                >
+                  <CreditCardVisual
+                    cardName={c.name}
+                    bankConnectorName={c.bank}
+                    number={c.number}
+                    owner={c.owner}
+                  />
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        Fatura aberta
+                      </p>
+                      <span
+                        className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${methodBadgeClass}`}
+                      >
+                        {methodLabel}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex items-end justify-between gap-2">
+                      <p className="text-2xl font-semibold tabular-nums text-gradient-warning">
+                        {formatBRL(c.used)}
+                      </p>
+                      <p className="pb-1 text-[11px] text-muted-foreground">
+                        de {formatBRL(c.limit)}
+                      </p>
+                    </div>
+                    <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/5">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${Math.min(100, c.usedPct)}%`,
+                          background:
+                            c.usedPct > 80
+                              ? "linear-gradient(90deg, #ff4566, #ff4566dd)"
+                              : c.usedPct > 50
+                                ? "linear-gradient(90deg, #ffb547, #ffb547dd)"
+                                : "linear-gradient(90deg, #00f5a0, #00f5a0dd)",
+                          boxShadow:
+                            c.usedPct > 80
+                              ? "0 0 12px #ff456688"
+                              : c.usedPct > 50
+                                ? "0 0 12px #ffb54788"
+                                : "0 0 12px #00f5a088",
+                        }}
+                      />
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-muted-foreground">
+                      {c.usedPct.toFixed(0)}% do limite · {formatBRL(c.available)} livre
+                    </p>
+                    <div className="mt-3 space-y-1 border-t border-border pt-2.5 text-[11px] text-muted-foreground">
+                      {c.futureInstallments > 0 && (
+                        <p className="flex items-center justify-between">
+                          <span>
+                            {c.method === "CYCLE_DATE"
+                              ? "Outros saldos"
+                              : "Parcelas futuras"}
+                          </span>
+                          <span className="font-medium text-foreground">
+                            +{formatBRL(c.futureInstallments)}
+                          </span>
+                        </p>
+                      )}
+                      <p className="flex items-center justify-between">
+                        <span>Total acumulado</span>
+                        <span className="font-medium text-foreground">
+                          {formatBRL(c.totalBalance)}
+                        </span>
+                      </p>
+                      {c.cycleCloseDate && (
+                        <p className="flex items-center justify-between">
+                          <span>Ciclo desde</span>
+                          <span className="font-medium text-foreground">
+                            {formatDateShort(c.cycleCloseDate)}
+                          </span>
+                        </p>
+                      )}
+                      {c.billDueDate && (
+                        <p className="flex items-center justify-between">
+                          <span>Próximo venc.</span>
+                          <span className="font-medium text-foreground">
+                            {formatDateShort(c.billDueDate)}
+                          </span>
+                        </p>
+                      )}
+                      {noBreakdown && (
+                        <p className="mt-1.5 rounded-md bg-warning/10 px-2 py-1.5 text-[10px] text-warning">
+                          Open Finance não retornou parcelas futuras pra esse banco — exibindo total acumulado.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </SectionCard>
+      )}
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <SectionCard
+          className="lg:col-span-2"
+          title="Transações recentes"
+          description="Últimas 8 movimentações"
+          action={
+            <Link
+              href="/transactions"
+              className="text-xs font-medium text-primary hover:text-primary/80"
+            >
+              Ver todas →
+            </Link>
+          }
+        >
+          {recent.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              Nenhuma transação. Adicione um Item ID em{" "}
+              <Link href="/settings" className="text-primary underline-offset-4 hover:underline">
+                Configurações
+              </Link>
+              .
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {recent.map((t) => (
+                <li key={t.id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+                  <span
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                      t.type === "DEBIT"
+                        ? "bg-destructive/10 text-destructive"
+                        : "bg-success/10 text-success"
+                    }`}
+                  >
+                    {t.type === "DEBIT" ? (
+                      <ArrowDownRight className="h-4 w-4" />
+                    ) : (
+                      <ArrowUpRight className="h-4 w-4" />
+                    )}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-foreground">{t.description}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {formatDateShort(t.date)} · {t.account.item.connectorName} · {t.account.name}
+                    </p>
+                  </div>
+                  <span
+                    className={`shrink-0 text-sm font-semibold tabular-nums ${
+                      t.type === "DEBIT" ? "text-destructive" : "text-success"
+                    }`}
+                  >
+                    {t.type === "DEBIT" ? "−" : "+"}
+                    {formatBRL(t.amount)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+
+        <SectionCard title="Gastos por banco" description={periodTitle(period)}>
+          {byBank.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              Sem dados ainda
+            </p>
+          ) : (
+            <BankBreakdown data={byBank} />
+          )}
+        </SectionCard>
+      </section>
     </div>
   );
 }
