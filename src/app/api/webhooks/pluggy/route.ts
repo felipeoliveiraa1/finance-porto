@@ -7,27 +7,60 @@ import { syncSingleItem } from "@/lib/sync";
 // the serverless function alive on Vercel after the response is sent.
 export const maxDuration = 60;
 
-export async function POST(req: Request) {
-  const secret = process.env.PLUGGY_WEBHOOK_SECRET;
-  if (secret) {
-    const provided = req.headers.get("x-webhook-secret") ?? req.headers.get("authorization");
-    if (provided !== secret && provided !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+type PluggyWebhookPayload = {
+  id?: string;
+  event?: string;
+  itemId?: string;
+  eventId?: string;
+  clientId?: string;
+  triggeredBy?: string;
+  clientUserId?: string | null;
+};
 
-  const body = await req.json().catch(() => null);
+// Events that mean we should pull fresh data for the item.
+const SYNC_EVENTS = new Set([
+  "item/created",
+  "item/updated",
+  "item/login_succeeded",
+  "transactions/created",
+  "transactions/updated",
+  "transactions/deleted",
+]);
+
+export async function POST(req: Request) {
+  const body = (await req.json().catch(() => null)) as PluggyWebhookPayload | null;
   if (!body || typeof body !== "object") {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
-  const event = (body as { event?: string }).event;
-  const itemId = (body as { itemId?: string }).itemId;
+  // Authenticate the webhook. Two paths are supported:
+  //  1) Custom shared-secret header (x-webhook-secret) — used for manual testing
+  //     via curl/Postman; doesn't apply to Pluggy itself, which doesn't sign requests.
+  //  2) clientId in the payload matches our PLUGGY_CLIENT_ID — this is how Pluggy's
+  //     native webhook system proves origin (the clientId is shared only between us
+  //     and Pluggy, so a third party can't fake it without leaking our credentials).
+  const headerSecret = process.env.PLUGGY_WEBHOOK_SECRET;
+  const ourClientId = process.env.PLUGGY_CLIENT_ID;
+  const providedHeader = req.headers.get("x-webhook-secret") ?? req.headers.get("authorization");
 
-  console.log(`[webhook] event=${event} itemId=${itemId}`);
+  const headerOk =
+    !!headerSecret &&
+    (providedHeader === headerSecret || providedHeader === `Bearer ${headerSecret}`);
+  const clientIdOk = !!ourClientId && body.clientId === ourClientId;
+
+  if (!headerOk && !clientIdOk) {
+    console.warn(
+      `[webhook] auth failed event=${body.event} itemId=${body.itemId} ` +
+        `headerOk=${headerOk} clientIdMatch=${clientIdOk} payloadClientId=${body.clientId}`,
+    );
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { event, itemId, eventId } = body;
+  console.log(`[webhook] received event=${event} itemId=${itemId} eventId=${eventId}`);
 
   if (!itemId) {
-    return NextResponse.json({ ok: true, ignored: true });
+    return NextResponse.json({ ok: true, ignored: "no itemId" });
   }
 
   if (event === "item/deleted") {
@@ -35,16 +68,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   }
 
-  if (
-    event === "item/created" ||
-    event === "item/updated" ||
-    event === "transactions/created" ||
-    event === "transactions/updated" ||
-    event === "transactions/deleted"
-  ) {
-    // Run the sync in the background after the response is sent.
-    // Without `after()`, Vercel kills the function the moment we return,
-    // and any in-flight Pluggy fetch is aborted mid-stream.
+  if (event && SYNC_EVENTS.has(event)) {
     after(async () => {
       const start = Date.now();
       try {
