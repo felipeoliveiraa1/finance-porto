@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { translateCategory } from "@/lib/categories";
 import { broadcastWhatsapp, parseReportPhones } from "@/lib/whatsapp";
 import { getCreditCardUsage } from "@/lib/queries";
-import { cleanTransactionDescription, detectBankLabel, formatAccountLabel } from "@/lib/bank";
+import { cleanTransactionDescription, detectBankLabel, formatAccountLabel, shortCardName } from "@/lib/bank";
 
 export const maxDuration = 60;
 
@@ -84,8 +84,17 @@ async function buildDailySummary(): Promise<string> {
         date: { gte: cardsLookbackStart, lte: todayEnd },
       },
       orderBy: [{ date: "desc" }, { amount: "desc" }],
-      take: 8,
-      include: { account: { select: { name: true, item: { select: { connectorName: true } } } } },
+      // No `take` limit — we group by card below, showing each card's full list.
+      include: {
+        account: {
+          select: {
+            id: true,
+            name: true,
+            owner: true,
+            item: { select: { connectorName: true } },
+          },
+        },
+      },
     }),
   ]);
 
@@ -132,22 +141,67 @@ async function buildDailySummary(): Promise<string> {
     }
   }
 
-  // Credit card section — accounts for the 24-48h latency typical of cartões
-  if (recentCardDebits.length > 0) {
+  // Credit card section — grouped by card so user sees every card's activity
+  // (or lack thereof) in the last 48h.
+  if (cards.length > 0) {
     lines.push("");
     lines.push("🏧 *Compras no cartão (48h):*");
     const dateFmt = (d: Date) =>
       d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
-    const cardTotal = recentCardDebits.reduce((s, t) => s + t.amount, 0);
-    for (const t of recentCardDebits.slice(0, 5)) {
-      const desc = cleanTransactionDescription(t.description, 26);
-      const bank = detectBankLabel(t.account.name, t.account.item.connectorName);
-      lines.push(`• ${dateFmt(t.date)} ${fmt(t.amount)} — ${desc} · ${bank}`);
+
+    // Group transactions by accountId
+    const byAccount = new Map<string, typeof recentCardDebits>();
+    for (const t of recentCardDebits) {
+      const arr = byAccount.get(t.account.id) ?? [];
+      arr.push(t);
+      byAccount.set(t.account.id, arr);
     }
-    if (recentCardDebits.length > 5) {
-      lines.push(`(+${recentCardDebits.length - 5} compras)`);
+
+    // Detect collisions on bank label so we can disambiguate by owner
+    const bankCounts = new Map<string, number>();
+    for (const c of cards) {
+      const bank = detectBankLabel(c.name, c.bank);
+      bankCounts.set(bank, (bankCounts.get(bank) ?? 0) + 1);
     }
-    lines.push(`Subtotal cartão 48h: ${fmt(cardTotal)}`);
+
+    // Sort: cards with activity first, then alphabetically
+    const sortedCards = [...cards].sort((a, b) => {
+      const aHas = (byAccount.get(a.id)?.length ?? 0) > 0;
+      const bHas = (byAccount.get(b.id)?.length ?? 0) > 0;
+      if (aHas !== bHas) return aHas ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    let totalSpent = 0;
+    for (const card of sortedCards) {
+      const txs = byAccount.get(card.id) ?? [];
+      const baseLabel = formatAccountLabel(card.name, card.bank);
+      const ownerFirst = (card.owner ?? "").trim().split(/\s+/)[0] ?? "";
+      const bank = detectBankLabel(card.name, card.bank);
+      const needsOwner = (bankCounts.get(bank) ?? 0) > 1 && ownerFirst;
+      const label = needsOwner
+        ? `${baseLabel} (${ownerFirst[0].toUpperCase()}${ownerFirst.slice(1).toLowerCase()})`
+        : baseLabel;
+
+      lines.push("");
+      if (txs.length === 0) {
+        lines.push(`⚪ *${label}* — sem compras`);
+        continue;
+      }
+      const subtotal = txs.reduce((s, t) => s + t.amount, 0);
+      totalSpent += subtotal;
+      const compraStr = txs.length === 1 ? "compra" : "compras";
+      lines.push(`🟢 *${label}* — ${txs.length} ${compraStr} · ${fmt(subtotal)}`);
+      for (const t of txs.slice(0, 5)) {
+        const desc = cleanTransactionDescription(t.description, 26);
+        lines.push(`  • ${dateFmt(t.date)} ${fmt(t.amount)} — ${desc}`);
+      }
+      if (txs.length > 5) {
+        lines.push(`  (+${txs.length - 5} compras)`);
+      }
+    }
+    lines.push("");
+    lines.push(`*Subtotal cartão 48h:* ${fmt(totalSpent)}`);
   }
 
   lines.push("");
