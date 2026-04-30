@@ -57,6 +57,13 @@ model Account {
   // and queries treat this as ground truth and skip the auto-computation.
   manualOpenBill        Float?
   manualOpenBillDueDate DateTime?
+  // Most recent CLOSED bill from Pluggy's bills API. Surfaced alongside our
+  // open-bill estimate so the user can spot discrepancies (their bank app
+  // sometimes shows the previous-bill value as the "fatura aberta", which is
+  // what we record here).
+  lastClosedBillAmount  Float?
+  lastClosedBillDueDate DateTime?
+  lastClosedBillPaidAmount Float?
 
   transactions Transaction[]
 
@@ -83,6 +90,12 @@ model Transaction {
   merchantName            String?
   paymentDataJson         String?
   providerCode            String?
+  // creditCardMetadata.billId from Pluggy — links a transaction to the bill
+  // it belongs to. Available for credit-card transactions on cards where
+  // Pluggy exposes it (MP, some Santander). When null, the transaction
+  // either isn't a credit-card tx or hasn't been assigned to a bill yet
+  // (the next/open bill).
+  pluggyBillId            String?
 
   userCategoryId String?
   userCategory   Category? @relation(fields: [userCategoryId], references: [id])
@@ -94,6 +107,7 @@ model Transaction {
   @@index([accountId, date])
   @@index([date])
   @@index([userCategoryId])
+  @@index([pluggyBillId])
 }
 
 model Category {

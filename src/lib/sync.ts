@@ -111,10 +111,16 @@ export async function syncSingleItem(itemId: string): Promise<{ accounts: number
 
   for (const acc of accounts) {
     let currentBill: { totalAmount: number; dueDate: Date; minimumPaymentAmount: number | null } | null = null;
+    let lastClosedBill: {
+      totalAmount: number;
+      dueDate: Date;
+      paidAmount: number | null;
+    } | null = null;
     if (acc.type === "CREDIT") {
       try {
         const billsResp = await pluggy.fetchCreditCardBills(acc.id);
         currentBill = pickCurrentBill(billsResp.results);
+        lastClosedBill = pickLastClosedBill(billsResp.results);
       } catch (err) {
         console.warn(`[sync] failed to fetch bills for ${acc.id}`, err);
       }
@@ -139,6 +145,9 @@ export async function syncSingleItem(itemId: string): Promise<{ accounts: number
         currentBillAmount: currentBill?.totalAmount ?? null,
         currentBillDueDate: currentBill?.dueDate ?? null,
         currentBillMinimum: currentBill?.minimumPaymentAmount ?? null,
+        lastClosedBillAmount: lastClosedBill?.totalAmount ?? null,
+        lastClosedBillDueDate: lastClosedBill?.dueDate ?? null,
+        lastClosedBillPaidAmount: lastClosedBill?.paidAmount ?? null,
       },
       update: {
         type: acc.type,
@@ -153,6 +162,9 @@ export async function syncSingleItem(itemId: string): Promise<{ accounts: number
         currentBillAmount: currentBill?.totalAmount ?? null,
         currentBillDueDate: currentBill?.dueDate ?? null,
         currentBillMinimum: currentBill?.minimumPaymentAmount ?? null,
+        lastClosedBillAmount: lastClosedBill?.totalAmount ?? null,
+        lastClosedBillDueDate: lastClosedBill?.dueDate ?? null,
+        lastClosedBillPaidAmount: lastClosedBill?.paidAmount ?? null,
       },
     });
   }
@@ -193,6 +205,13 @@ export async function syncSingleItem(itemId: string): Promise<{ accounts: number
               : null;
           const userCategoryId = matchedName ? catByName[matchedName] ?? null : null;
 
+          // billId tells us which credit-card bill this transaction is part
+          // of. When a tx is later assigned to a closed bill, Pluggy starts
+          // returning a billId for it — we update it on every sync.
+          const meta = (tx as unknown as { creditCardMetadata?: { billId?: string } })
+            .creditCardMetadata;
+          const pluggyBillId = meta?.billId ?? null;
+
           return db.transaction.upsert({
             where: { id: tx.id },
             create: {
@@ -211,6 +230,7 @@ export async function syncSingleItem(itemId: string): Promise<{ accounts: number
               merchantName: tx.merchant?.name ?? null,
               paymentDataJson: tx.paymentData ? JSON.stringify(tx.paymentData) : null,
               providerCode: tx.providerCode ?? null,
+              pluggyBillId,
               userCategoryId,
             },
             update: {
@@ -226,6 +246,7 @@ export async function syncSingleItem(itemId: string): Promise<{ accounts: number
               merchantName: tx.merchant?.name ?? null,
               paymentDataJson: tx.paymentData ? JSON.stringify(tx.paymentData) : null,
               providerCode: tx.providerCode ?? null,
+              pluggyBillId,
               // Don't touch userCategoryId on update — preserve user edits.
             },
           });
@@ -255,4 +276,34 @@ function pickCurrentBill(
   return [...bills].sort(
     (a, b) => new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime(),
   )[0];
+}
+
+// The most recently closed bill — the one with the latest dueDate. We treat
+// EVERY bill returned by Pluggy as "closed" (Pluggy doesn't expose pending
+// open-cycle bills). The user's bank app sometimes shows this value as the
+// "fatura aberta" — surfacing it lets the user reconcile easily.
+function pickLastClosedBill(
+  bills: {
+    totalAmount: number;
+    dueDate: Date;
+    payments?: { amount: number }[];
+  }[],
+): { totalAmount: number; dueDate: Date; paidAmount: number | null } | null {
+  if (!bills.length) return null;
+  const sorted = [...bills].sort(
+    (a, b) => new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime(),
+  );
+  const latest = sorted[0];
+  const paidAmount = latest.payments?.reduce((s, p) => s + (p.amount ?? 0), 0) ?? null;
+  // When Pluggy reports totalAmount=0 for a fully-paid bill (Mercado Pago does
+  // this), surface the payment sum as the effective bill amount — that's what
+  // the user expects to see as the "fatura anterior". When the bill is unpaid
+  // or partial, totalAmount is the source of truth.
+  const effectiveAmount =
+    latest.totalAmount > 0 ? latest.totalAmount : paidAmount ?? 0;
+  return {
+    totalAmount: effectiveAmount,
+    dueDate: new Date(latest.dueDate),
+    paidAmount,
+  };
 }

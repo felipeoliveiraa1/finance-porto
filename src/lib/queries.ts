@@ -581,6 +581,12 @@ export async function getCreditCardUsage(opts?: { owner?: string }) {
       billMinimum: c.currentBillMinimum ?? null,
       manualOpenBill: c.manualOpenBill ?? null,
       manualOpenBillDueDate: c.manualOpenBillDueDate ?? null,
+      // Most recent CLOSED bill from Pluggy (sometimes what the bank app
+      // shows as "fatura aberta" while waiting for payment). Helps the user
+      // reconcile when our estimate doesn't match.
+      lastClosedBillAmount: c.lastClosedBillAmount ?? null,
+      lastClosedBillDueDate: c.lastClosedBillDueDate ?? null,
+      lastClosedBillPaidAmount: c.lastClosedBillPaidAmount ?? null,
     };
   });
 }

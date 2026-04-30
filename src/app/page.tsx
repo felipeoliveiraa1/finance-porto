@@ -466,6 +466,41 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
                           </span>
                         </p>
                       )}
+                      {c.lastClosedBillAmount != null && c.lastClosedBillDueDate && (
+                        <p className="flex items-center justify-between">
+                          <span>
+                            Fatura anterior
+                            {c.lastClosedBillDueDate && (
+                              <span className="text-muted-foreground/60">
+                                {" "}
+                                · venc {formatDateShort(c.lastClosedBillDueDate)}
+                              </span>
+                            )}
+                          </span>
+                          <span className="font-medium text-foreground">
+                            {formatBRL(c.lastClosedBillAmount)}
+                            {c.lastClosedBillPaidAmount != null &&
+                              c.lastClosedBillPaidAmount > 0 && (
+                                <span
+                                  className={cn(
+                                    "ml-1 text-[10px]",
+                                    Math.abs(
+                                      c.lastClosedBillPaidAmount - c.lastClosedBillAmount,
+                                    ) < 1
+                                      ? "text-success"
+                                      : "text-warning",
+                                  )}
+                                >
+                                  {Math.abs(
+                                    c.lastClosedBillPaidAmount - c.lastClosedBillAmount,
+                                  ) < 1
+                                    ? "✓ paga"
+                                    : `parcial`}
+                                </span>
+                              )}
+                          </span>
+                        </p>
+                      )}
                       {noBreakdown && (
                         <p className="mt-1.5 rounded-md bg-warning/10 px-2 py-1.5 text-[10px] text-warning">
                           Open Finance não retornou parcelas futuras pra esse banco — exibindo total acumulado.
