@@ -186,10 +186,45 @@ export function previousRange(range: DateRange): DateRange {
   return { from: prevFrom, to: prevTo };
 }
 
-type Filter = Partial<DateRange> & { accountId?: string };
+type Filter = Partial<DateRange> & { accountId?: string; owner?: string };
+
+/**
+ * Returns the lowercased first names of all account owners in the workspace.
+ * Used to populate the "Filtrar por pessoa" UI ([Felipe, Milena, ...]).
+ */
+export async function getOwnerFirstNames(): Promise<string[]> {
+  const accounts = await db.account.findMany({
+    select: { owner: true },
+    where: { owner: { not: null } },
+  });
+  const seen = new Set<string>();
+  for (const a of accounts) {
+    const first = a.owner?.trim().split(/\s+/)[0]?.toLowerCase();
+    if (first && first.length >= 3) seen.add(first);
+  }
+  return [...seen].sort();
+}
+
+function accountWhereFromFilter(filter?: Filter) {
+  if (filter?.accountId) return { id: filter.accountId };
+  if (filter?.owner)
+    return {
+      owner: { contains: filter.owner, mode: "insensitive" as const },
+    };
+  return {};
+}
+
+function txAccountWhereFromFilter(filter?: Filter) {
+  if (filter?.accountId) return { accountId: filter.accountId };
+  if (filter?.owner)
+    return {
+      account: { owner: { contains: filter.owner, mode: "insensitive" as const } },
+    };
+  return {};
+}
 
 export async function getOverview(filter?: Filter) {
-  const accountWhere = filter?.accountId ? { id: filter.accountId } : {};
+  const accountWhere = accountWhereFromFilter(filter);
   const accounts = await db.account.findMany({
     where: accountWhere,
     select: {
@@ -218,7 +253,7 @@ export async function getOverview(filter?: Filter) {
 
   const r = resolveRange(filter);
   const prev = previousRange(r);
-  const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
+  const accountFilter = txAccountWhereFromFilter(filter);
   const internalFilter = await buildExcludeInternalTransferFilter();
 
   const [periodDebits, prevPeriodDebits, periodCredits, prevPeriodCredits] = await Promise.all([
@@ -284,7 +319,7 @@ export async function getRecentTransactions(limit = 10) {
 
 export async function getSpendByCategory(filter?: Filter) {
   const r = resolveRange(filter);
-  const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
+  const accountFilter = txAccountWhereFromFilter(filter);
   const internalFilter = await buildExcludeInternalTransferFilter();
   const txs = await db.transaction.findMany({
     where: { ...accountFilter, ...internalFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
@@ -312,7 +347,7 @@ export async function getSpendByCategory(filter?: Filter) {
 
 export async function getSpendByBank(filter?: Filter) {
   const r = resolveRange(filter);
-  const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
+  const accountFilter = txAccountWhereFromFilter(filter);
   const internalFilter = await buildExcludeInternalTransferFilter();
   const txs = await db.transaction.findMany({
     where: { ...accountFilter, ...internalFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
@@ -388,7 +423,7 @@ export async function getSpendByBank(filter?: Filter) {
 }
 
 export async function getDailySpendSeries(
-  opts?: { days?: number; accountId?: string } & Partial<DateRange>,
+  opts?: { days?: number; accountId?: string; owner?: string } & Partial<DateRange>,
 ) {
   let start: Date;
   let end: Date;
@@ -405,7 +440,7 @@ export async function getDailySpendSeries(
     start.setDate(start.getDate() - days);
     start.setHours(0, 0, 0, 0);
   }
-  const accountFilter = opts?.accountId ? { accountId: opts.accountId } : {};
+  const accountFilter = txAccountWhereFromFilter(opts);
   const internalFilter = await buildExcludeInternalTransferFilter();
   const txs = await db.transaction.findMany({
     where: { ...accountFilter, ...internalFilter, date: { gte: start, lte: end }, type: "DEBIT" },
@@ -426,9 +461,13 @@ export async function getDailySpendSeries(
   return [...byDay.entries()].map(([date, amount]) => ({ date, amount }));
 }
 
-export async function getMonthlyCashflowSeries(months = 12, accountId?: string) {
+export async function getMonthlyCashflowSeries(
+  months = 12,
+  accountId?: string,
+  owner?: string,
+) {
   const start = startOfMonthsAgo(months - 1);
-  const accountFilter = accountId ? { accountId } : {};
+  const accountFilter = txAccountWhereFromFilter({ accountId, owner });
   const internalFilter = await buildExcludeInternalTransferFilter();
   const txs = await db.transaction.findMany({
     where: { ...accountFilter, ...internalFilter, date: { gte: start } },
@@ -457,7 +496,7 @@ export async function getMonthlyCashflowSeries(months = 12, accountId?: string) 
 
 export async function getTopMerchants(limit = 5, filter?: Filter) {
   const r = resolveRange(filter);
-  const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
+  const accountFilter = txAccountWhereFromFilter(filter);
   const internalFilter = await buildExcludeInternalTransferFilter();
   const txs = await db.transaction.findMany({
     where: { ...accountFilter, ...internalFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
@@ -474,10 +513,13 @@ export async function getTopMerchants(limit = 5, filter?: Filter) {
   return [...byMerchant.values()].sort((a, b) => b.total - a.total).slice(0, limit);
 }
 
-export async function getCreditCardUsage() {
+export async function getCreditCardUsage(opts?: { owner?: string }) {
+  const ownerWhere = opts?.owner
+    ? { owner: { contains: opts.owner, mode: "insensitive" as const } }
+    : {};
   const [cards, openBills] = await Promise.all([
     db.account.findMany({
-      where: { type: "CREDIT" },
+      where: { type: "CREDIT", ...ownerWhere },
       include: { item: { select: { connectorName: true, connectorPrimaryColor: true } } },
       orderBy: { balance: "desc" },
     }),

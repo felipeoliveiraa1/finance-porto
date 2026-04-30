@@ -22,6 +22,7 @@ import {
 } from "@/components/charts";
 import { hasPluggyCredentials } from "@/lib/pluggy";
 import { CardFilter } from "@/components/card-filter";
+import { OwnerFilter } from "@/components/owner-filter";
 import {
   getOverview,
   getRecentTransactions,
@@ -32,6 +33,7 @@ import {
   getTopMerchants,
   getCreditCardUsage,
   getLastSync,
+  getOwnerFirstNames,
 } from "@/lib/queries";
 import { formatBRL, formatDateShort, formatRelative } from "@/lib/format";
 import { DateRangeFilter } from "@/components/date-range-filter";
@@ -39,7 +41,12 @@ import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = Promise<{ from?: string; to?: string; accountId?: string }>;
+type SearchParams = Promise<{
+  from?: string;
+  to?: string;
+  accountId?: string;
+  owner?: string;
+}>;
 
 const parseRangeBoundary = (iso: string | undefined, isEndOfDay: boolean): Date | undefined => {
   if (!iso) return undefined;
@@ -92,10 +99,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
   const params = await searchParams;
   const credsOk = hasPluggyCredentials();
   const accountId = params.accountId || undefined;
+  const owner = params.owner?.trim().toLowerCase() || undefined;
   const filter = {
     from: parseRangeBoundary(params.from, false),
     to: parseRangeBoundary(params.to, true),
     accountId,
+    owner,
   };
   const period = periodLabel(params.from, params.to);
 
@@ -109,18 +118,20 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
     merchants,
     cards,
     lastSync,
+    owners,
   ] = await Promise.all([
     getOverview(filter),
     getRecentTransactions(8),
     getSpendByCategory(filter),
     getSpendByBank(filter),
     getDailySpendSeries(
-      params.from || params.to ? { ...filter } : { days: 30, accountId },
+      params.from || params.to ? { ...filter } : { days: 30, accountId, owner },
     ),
-    getMonthlyCashflowSeries(12, accountId),
+    getMonthlyCashflowSeries(12, accountId, owner),
     getTopMerchants(5, filter),
-    getCreditCardUsage(),
+    getCreditCardUsage({ owner }),
     getLastSync(),
+    getOwnerFirstNames(),
   ]);
 
   const selectedCard = accountId ? cards.find((c) => c.id === accountId) : null;
@@ -155,7 +166,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <DateRangeFilter from={params.from} to={params.to} />
+          {owners.length > 1 && <OwnerFilter owners={owners} selected={owner} />}
           {cards.length > 0 && (
             <CardFilter
               cards={cards.map((c) => ({
@@ -168,6 +179,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
               selectedId={accountId}
             />
           )}
+          <DateRangeFilter from={params.from} to={params.to} />
           <SyncButton />
         </div>
       </header>
