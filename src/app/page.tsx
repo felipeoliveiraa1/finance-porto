@@ -21,7 +21,7 @@ import {
   BankBreakdown,
 } from "@/components/charts";
 import { hasPluggyCredentials } from "@/lib/pluggy";
-import { LayoutGrid } from "lucide-react";
+import { CardFilter } from "@/components/card-filter";
 import {
   getOverview,
   getRecentTransactions,
@@ -156,68 +156,26 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <DateRangeFilter from={params.from} to={params.to} />
+          {cards.length > 0 && (
+            <CardFilter
+              cards={cards.map((c) => ({
+                id: c.id,
+                name: c.name,
+                bank: c.bank,
+                number: c.number,
+                owner: c.owner,
+              }))}
+              selectedId={accountId}
+            />
+          )}
           <SyncButton />
         </div>
       </header>
 
-      {cards.length > 0 && (
-        <section className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              Filtrar por cartão
-            </p>
-            {selectedCard && (
-              <Link
-                href={buildHref(params, { accountId: undefined })}
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-                Limpar filtro
-              </Link>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            <Link
-              href={buildHref(params, { accountId: undefined })}
-              className={cn(
-                "group flex aspect-[1.586/1] flex-col items-center justify-center overflow-hidden rounded-xl glass top-highlight border-gradient transition-all duration-200",
-                !accountId
-                  ? "ring-2 ring-primary shadow-[0_0_30px_rgba(79,140,255,0.4)]"
-                  : "opacity-75 hover:opacity-100",
-              )}
-            >
-              <LayoutGrid className="h-5 w-5 text-primary" />
-              <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground">
-                Todos
-              </p>
-            </Link>
-            {cards.map((c) => (
-              <Link
-                key={c.id}
-                href={buildHref(params, { accountId: c.id })}
-                className={cn(
-                  "transition-all duration-200 rounded-xl",
-                  c.id === accountId
-                    ? "ring-2 ring-primary shadow-[0_0_30px_rgba(79,140,255,0.4)]"
-                    : "opacity-65 hover:opacity-100",
-                )}
-              >
-                <CreditCardVisual
-                  cardName={c.name}
-                  bankConnectorName={c.bank}
-                  number={c.number}
-                  owner={c.owner}
-                  compact
-                />
-              </Link>
-            ))}
-          </div>
-        </section>
-      )}
-
       {selectedCard && (
         <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-2.5 text-xs text-muted-foreground">
-          Filtrando por <span className="font-semibold text-foreground">{selectedCard.name.trim()}</span>{" "}
+          Filtrando por{" "}
+          <span className="font-semibold text-foreground">{selectedCard.name.trim()}</span>{" "}
           ({selectedCard.bank}) — todos os KPIs e gráficos abaixo respeitam essa seleção.
         </div>
       )}

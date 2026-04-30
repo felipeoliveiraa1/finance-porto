@@ -56,9 +56,13 @@ async function buildDailySummary(): Promise<string> {
   yesterdayStart.setUTCDate(yesterdayStart.getUTCDate() - 1);
   const yesterdayEnd = new Date(todayStart.getTime() - 1);
 
+  // For credit cards, look back 48h since they typically settle 1-2 days later.
+  const cardsLookbackStart = new Date(todayStart);
+  cardsLookbackStart.setUTCDate(cardsLookbackStart.getUTCDate() - 1);
+
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 3, 0, 0));
 
-  const [todayDebits, yesterdayDebits, monthDebits, cards] = await Promise.all([
+  const [todayDebits, yesterdayDebits, monthDebits, cards, recentCardDebits] = await Promise.all([
     db.transaction.findMany({
       where: { date: { gte: todayStart, lte: todayEnd }, type: "DEBIT" },
       orderBy: { amount: "desc" },
@@ -73,6 +77,16 @@ async function buildDailySummary(): Promise<string> {
       select: { amount: true, pluggyCategory: true, pluggyCategoryId: true },
     }),
     getCreditCardUsage(),
+    db.transaction.findMany({
+      where: {
+        account: { type: "CREDIT" },
+        type: "DEBIT",
+        date: { gte: cardsLookbackStart, lte: todayEnd },
+      },
+      orderBy: [{ date: "desc" }, { amount: "desc" }],
+      take: 8,
+      include: { account: { select: { name: true, item: { select: { connectorName: true } } } } },
+    }),
   ]);
 
   const todayTotal = todayDebits.reduce((s, t) => s + t.amount, 0);
@@ -116,6 +130,24 @@ async function buildDailySummary(): Promise<string> {
       const bank = detectBankLabel(t.account.name, t.account.item.connectorName);
       lines.push(`• ${fmt(t.amount)} — ${desc} · ${bank}`);
     }
+  }
+
+  // Credit card section — accounts for the 24-48h latency typical of cartões
+  if (recentCardDebits.length > 0) {
+    lines.push("");
+    lines.push("🏧 *Compras no cartão (48h):*");
+    const dateFmt = (d: Date) =>
+      d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
+    const cardTotal = recentCardDebits.reduce((s, t) => s + t.amount, 0);
+    for (const t of recentCardDebits.slice(0, 5)) {
+      const desc = cleanTransactionDescription(t.description, 26);
+      const bank = detectBankLabel(t.account.name, t.account.item.connectorName);
+      lines.push(`• ${dateFmt(t.date)} ${fmt(t.amount)} — ${desc} · ${bank}`);
+    }
+    if (recentCardDebits.length > 5) {
+      lines.push(`(+${recentCardDebits.length - 5} compras)`);
+    }
+    lines.push(`Subtotal cartão 48h: ${fmt(cardTotal)}`);
   }
 
   lines.push("");
