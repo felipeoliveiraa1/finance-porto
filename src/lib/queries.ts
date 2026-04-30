@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { translateCategory } from "./categories";
+import { detectBankKey, BANK_LABEL, type BankKey } from "./bank";
 
 const RECENT_INSTALLMENT_DAYS = 60;
 // Brazilian credit cards typically close ~9 days before due date
@@ -315,26 +316,71 @@ export async function getSpendByBank(filter?: Filter) {
       amount: true,
       account: {
         select: {
-          item: { select: { id: true, connectorName: true, connectorPrimaryColor: true } },
+          name: true,
+          owner: true,
+          item: {
+            select: { id: true, connectorName: true, connectorPrimaryColor: true },
+          },
         },
       },
     },
   });
-  const byBank = new Map<string, { id: string; name: string; color?: string | null; total: number; count: number }>();
+
+  // Aggregate per Item (= per real bank connection). For each, infer the bank
+  // from the account names within that item.
+  type Bucket = {
+    itemId: string;
+    bankKey: BankKey;
+    ownerFirstName: string;
+    color?: string | null;
+    total: number;
+    count: number;
+    sampleAccountName: string;
+  };
+  const byItem = new Map<string, Bucket>();
   for (const t of txs) {
     const item = t.account.item;
-    const cur = byBank.get(item.id) ?? {
-      id: item.id,
-      name: item.connectorName,
-      color: item.connectorPrimaryColor,
-      total: 0,
-      count: 0,
-    };
+    let cur = byItem.get(item.id);
+    if (!cur) {
+      cur = {
+        itemId: item.id,
+        bankKey: detectBankKey(t.account.name, item.connectorName),
+        ownerFirstName: ((t.account.owner ?? "").trim().split(/\s+/)[0] ?? "").toLowerCase(),
+        color: item.connectorPrimaryColor,
+        total: 0,
+        count: 0,
+        sampleAccountName: t.account.name,
+      };
+      byItem.set(item.id, cur);
+    }
     cur.total += t.amount;
     cur.count += 1;
-    byBank.set(item.id, cur);
   }
-  return [...byBank.values()].sort((a, b) => b.total - a.total);
+
+  // Disambiguate items that resolve to the same bank (e.g. Felipe and Milena
+  // both have Santander) by appending the owner's first name.
+  const bankFrequency = new Map<BankKey, number>();
+  for (const b of byItem.values()) {
+    bankFrequency.set(b.bankKey, (bankFrequency.get(b.bankKey) ?? 0) + 1);
+  }
+
+  const titleCase = (s: string) =>
+    s ? s[0].toUpperCase() + s.slice(1).toLowerCase() : s;
+
+  return [...byItem.values()]
+    .map((b) => {
+      const baseLabel = BANK_LABEL[b.bankKey];
+      const needsOwner = (bankFrequency.get(b.bankKey) ?? 0) > 1 && b.ownerFirstName;
+      const name = needsOwner ? `${baseLabel} · ${titleCase(b.ownerFirstName)}` : baseLabel;
+      return {
+        id: b.itemId,
+        name,
+        color: b.color,
+        total: b.total,
+        count: b.count,
+      };
+    })
+    .sort((a, b) => b.total - a.total);
 }
 
 export async function getDailySpendSeries(
@@ -433,12 +479,16 @@ export async function getCreditCardUsage() {
   return cards.map((c) => {
     const computed = openBills.get(c.id);
     const openBill = computed?.openBill ?? c.balance;
+    // Resolve the real bank name from the card name (Pluggy reports
+    // everything as "MeuPluggy" via the meu.pluggy.ai connector).
+    const bankKey = detectBankKey(c.name, c.item.connectorName);
+    const bankLabel = BANK_LABEL[bankKey];
     return {
       id: c.id,
       name: c.name,
       number: c.number ?? null,
       owner: c.owner ?? null,
-      bank: c.item.connectorName,
+      bank: bankLabel,
       color: c.item.connectorPrimaryColor,
       used: openBill,
       totalBalance: c.balance,
