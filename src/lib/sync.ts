@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { getPluggyClient } from "./pluggy";
+import { categorizeOne, ensureCategories } from "./auto-categorize";
 
 type SyncResult = {
   syncLogId: string;
@@ -161,6 +162,10 @@ export async function syncSingleItem(itemId: string): Promise<{ accounts: number
     since.getDate() - (isInitialSync ? FETCH_INITIAL_DAYS : FETCH_INCREMENTAL_DAYS),
   );
 
+  // Make sure the household categories exist + grab the name→id map so we
+  // can auto-categorize each new DEBIT during the upsert (no second pass).
+  const catByName = await ensureCategories();
+
   let txCount = 0;
   // Batch upserts in parallel — Postgres + the pgbouncer pooler handle the
   // concurrency well, and serial upserts blew our 60s Vercel budget on full
@@ -174,8 +179,21 @@ export async function syncSingleItem(itemId: string): Promise<{ accounts: number
     for (let i = 0; i < transactions.length; i += UPSERT_BATCH_SIZE) {
       const batch = transactions.slice(i, i + UPSERT_BATCH_SIZE);
       await Promise.all(
-        batch.map((tx) =>
-          db.transaction.upsert({
+        batch.map((tx) => {
+          // Auto-categorize debits via household rules. We only set the
+          // category on CREATE — never overwrite an existing user category,
+          // which preserves manual edits made in the dashboard.
+          const matchedName =
+            tx.type === "DEBIT"
+              ? categorizeOne({
+                  description: tx.description,
+                  merchantName: tx.merchant?.name ?? null,
+                  pluggyCategoryId: tx.categoryId ?? null,
+                })
+              : null;
+          const userCategoryId = matchedName ? catByName[matchedName] ?? null : null;
+
+          return db.transaction.upsert({
             where: { id: tx.id },
             create: {
               id: tx.id,
@@ -193,6 +211,7 @@ export async function syncSingleItem(itemId: string): Promise<{ accounts: number
               merchantName: tx.merchant?.name ?? null,
               paymentDataJson: tx.paymentData ? JSON.stringify(tx.paymentData) : null,
               providerCode: tx.providerCode ?? null,
+              userCategoryId,
             },
             update: {
               type: tx.type,
@@ -207,9 +226,10 @@ export async function syncSingleItem(itemId: string): Promise<{ accounts: number
               merchantName: tx.merchant?.name ?? null,
               paymentDataJson: tx.paymentData ? JSON.stringify(tx.paymentData) : null,
               providerCode: tx.providerCode ?? null,
+              // Don't touch userCategoryId on update — preserve user edits.
             },
-          }),
-        ),
+          });
+        }),
       );
       txCount += batch.length;
     }

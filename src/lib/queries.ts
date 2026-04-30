@@ -362,6 +362,10 @@ export async function getSpendByCategory(filter?: Filter) {
     const cur = byCat.get(name) ?? { name, emoji, total: 0, count: 0 };
     cur.total += t.amount;
     cur.count += 1;
+    // When the same display name comes from both a userCategory (with emoji)
+    // and a Pluggy translation (no emoji), prefer the emoji'd version so the
+    // dashboard chip stays visually consistent.
+    if (!cur.emoji && emoji) cur.emoji = emoji;
     byCat.set(name, cur);
   }
   return [...byCat.values()].sort((a, b) => b.total - a.total);
