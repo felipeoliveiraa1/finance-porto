@@ -2,6 +2,7 @@ import { NextResponse, after } from "next/server";
 import { db } from "@/lib/db";
 import { syncSingleItem } from "@/lib/sync";
 import { broadcastWhatsapp, parseReportPhones, isWhatsappConfigured } from "@/lib/whatsapp";
+import { cleanTransactionDescription, detectBankLabel } from "@/lib/bank";
 
 // Pluggy retries 5xx but expects ack within ~30s. We respond fast (200),
 // then run the actual sync in the background via `after()` — which keeps
@@ -106,7 +107,9 @@ export async function POST(req: Request) {
                 v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
               const arrow = tx.type === "DEBIT" ? "💸" : "💰";
               const sign = tx.type === "DEBIT" ? "-" : "+";
-              const msg = `${arrow} *${sign}${fmt(tx.amount)}* — ${tx.description.slice(0, 50)}\n${tx.account.item.connectorName} · ${tx.account.name.trim()}`;
+              const desc = cleanTransactionDescription(tx.description, 45);
+              const bank = detectBankLabel(tx.account.name, tx.account.item.connectorName);
+              const msg = `${arrow} *${sign}${fmt(tx.amount)}* — ${desc}\n${bank} · ${tx.account.name.trim()}`;
               await broadcastWhatsapp(phones, msg);
             }
           }

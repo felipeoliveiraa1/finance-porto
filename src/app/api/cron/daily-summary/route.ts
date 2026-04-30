@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { translateCategory } from "@/lib/categories";
 import { broadcastWhatsapp, parseReportPhones } from "@/lib/whatsapp";
 import { getCreditCardUsage } from "@/lib/queries";
+import { cleanTransactionDescription, detectBankLabel, formatAccountLabel } from "@/lib/bank";
 
 export const maxDuration = 60;
 
@@ -111,8 +112,9 @@ async function buildDailySummary(): Promise<string> {
     lines.push("");
     lines.push("*Maiores gastos:*");
     for (const t of todayDebits.slice(0, 3)) {
-      const desc = t.description.slice(0, 30);
-      lines.push(`• ${fmt(t.amount)} — ${desc} (${t.account.item.connectorName})`);
+      const desc = cleanTransactionDescription(t.description, 32);
+      const bank = detectBankLabel(t.account.name, t.account.item.connectorName);
+      lines.push(`• ${fmt(t.amount)} — ${desc} · ${bank}`);
     }
   }
 
@@ -127,10 +129,15 @@ async function buildDailySummary(): Promise<string> {
     lines.push("*Faturas abertas:*");
     for (const c of cards) {
       const due = c.billDueDate
-        ? new Date(c.billDueDate).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })
+        ? new Date(c.billDueDate).toLocaleDateString("pt-BR", {
+            day: "2-digit",
+            month: "short",
+            timeZone: "UTC",
+          })
         : null;
       const dueStr = due ? ` (venc ${due})` : "";
-      lines.push(`• ${c.bank}: ${fmt(c.used)}${dueStr}`);
+      const label = formatAccountLabel(c.name, c.bank);
+      lines.push(`• ${label}: ${fmt(c.used)}${dueStr}`);
     }
   }
 
