@@ -708,6 +708,10 @@ export async function getRecurringExpenses(opts?: {
       date: true,
       pluggyCategory: true,
       pluggyCategoryId: true,
+      // Pull the household category so the recurring detector can label
+      // groups with our taxonomy (Helena, Mercado, Moradia…) instead of the
+      // generic Pluggy buckets.
+      userCategory: { select: { name: true } },
     },
     orderBy: { date: "asc" },
   });
@@ -790,11 +794,22 @@ export async function getRecurringExpenses(opts?: {
     const monthlyEstimate = isInstallment && installmentsRemaining === 0 ? 0 : avgAmount;
     const totalSpent = amounts.reduce((s, a) => s + a, 0);
 
+    // Pick the most-common household category for the group; fall back to the
+    // last transaction's Pluggy category if none has a userCategory.
+    const userCatNames = sorted
+      .map((s) => s.userCategory?.name)
+      .filter((n): n is string => Boolean(n));
+    let dominantUserCat: string | null = null;
+    if (userCatNames.length > 0) {
+      const counts = new Map<string, number>();
+      for (const n of userCatNames) counts.set(n, (counts.get(n) ?? 0) + 1);
+      dominantUserCat = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    }
     results.push({
       signature,
       label: humanize(signature, sorted),
-      category: sorted[sorted.length - 1].pluggyCategory ?? null,
-      categoryId: sorted[sorted.length - 1].pluggyCategoryId ?? null,
+      category: dominantUserCat ?? sorted[sorted.length - 1].pluggyCategory ?? null,
+      categoryId: dominantUserCat ? null : sorted[sorted.length - 1].pluggyCategoryId ?? null,
       avgAmount,
       minAmount,
       maxAmount,

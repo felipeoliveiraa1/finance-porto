@@ -62,7 +62,7 @@ export const COACH_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "get_spend_by_category",
       description:
-        "Retorna gastos agrupados por categoria (Mercado, Restaurantes, Delivery, etc.) num intervalo, ordenados por valor decrescente. Inclui total, quantidade de transações e percentual sobre o total. Use quando o usuário perguntar 'em que gastei?' ou pedir análise por tipo de gasto.",
+        "Retorna gastos agrupados por categoria da taxonomia da casa (Moradia, Alimentação, Mercado, Helena, Vestuário, Farmácia, etc.) num intervalo, ordenados por valor decrescente. Inclui total, quantidade de transações e percentual sobre o total. Use quando o usuário perguntar 'em que gastei?' ou pedir análise por tipo de gasto. Categorias fora da taxonomia da casa (ex: 'Restaurantes', 'Investimentos') são fallback do Pluggy pras transações que nossas regras não cobriram.",
       parameters: {
         type: "object",
         properties: {
@@ -289,6 +289,10 @@ async function getMonthlySummary(monthsBack: number, monthsRange: number) {
       pluggyCategoryId: true,
       merchantName: true,
       description: true,
+      // Prefer the household taxonomy (Mercado, Helena, Moradia, etc.) over
+      // Pluggy's raw categorization, which is too generic and sometimes wrong
+      // (e.g. PIX para Noratha → "Atividade empreendedora" no Pluggy).
+      userCategory: { select: { name: true } },
     },
   });
 
@@ -302,7 +306,9 @@ async function getMonthlySummary(monthsBack: number, monthsRange: number) {
       totalSpend += t.amount;
       biggestSpend = Math.max(biggestSpend, t.amount);
       const catName =
-        translateCategory(t.pluggyCategoryId, t.pluggyCategory) ?? "Sem categoria";
+        t.userCategory?.name ??
+        translateCategory(t.pluggyCategoryId, t.pluggyCategory) ??
+        "Sem categoria";
       const cur = byCategory.get(catName) ?? { name: catName, total: 0, count: 0 };
       cur.total += t.amount;
       cur.count += 1;
@@ -343,20 +349,39 @@ async function spendByCategory(fromIso?: string, toIso?: string) {
   const to = parseDateBoundary(toIso, true) ?? new Date();
   const internalFilter = await buildExcludeInternalTransferFilter();
 
-  const grouped = await db.transaction.groupBy({
-    by: ["pluggyCategoryId", "pluggyCategory"],
+  // Manual grouping (vs Prisma groupBy) so we can fall through userCategory →
+  // Pluggy translation. The household taxonomy is far more accurate for our
+  // family's spending than Pluggy's generic buckets.
+  const txs = await db.transaction.findMany({
     where: { ...internalFilter, type: "DEBIT", date: { gte: from, lte: to } },
-    _sum: { amount: true },
-    _count: true,
+    select: {
+      amount: true,
+      pluggyCategory: true,
+      pluggyCategoryId: true,
+      userCategory: { select: { name: true } },
+    },
   });
 
-  const totalSpend = grouped.reduce((s, g) => s + (g._sum.amount ?? 0), 0);
-  const categories = grouped
-    .map((g) => ({
-      category: translateCategory(g.pluggyCategoryId, g.pluggyCategory) ?? "Sem categoria",
-      total: round2(g._sum.amount ?? 0),
-      count: g._count,
-      pctOfSpend: totalSpend > 0 ? round2(((g._sum.amount ?? 0) / totalSpend) * 100) : 0,
+  const byCat = new Map<string, { total: number; count: number }>();
+  let totalSpend = 0;
+  for (const t of txs) {
+    const catName =
+      t.userCategory?.name ??
+      translateCategory(t.pluggyCategoryId, t.pluggyCategory) ??
+      "Sem categoria";
+    const cur = byCat.get(catName) ?? { total: 0, count: 0 };
+    cur.total += t.amount;
+    cur.count += 1;
+    byCat.set(catName, cur);
+    totalSpend += t.amount;
+  }
+
+  const categories = [...byCat.entries()]
+    .map(([name, agg]) => ({
+      category: name,
+      total: round2(agg.total),
+      count: agg.count,
+      pctOfSpend: totalSpend > 0 ? round2((agg.total / totalSpend) * 100) : 0,
     }))
     .sort((a, b) => b.total - a.total);
 
@@ -525,6 +550,7 @@ async function transactions(opts: {
       merchantName: true,
       pluggyCategory: true,
       pluggyCategoryId: true,
+      userCategory: { select: { name: true } },
       account: { select: { name: true, item: { select: { connectorName: true } } } },
     },
   });
@@ -537,7 +563,9 @@ async function transactions(opts: {
       amount: round2(t.amount),
       description: t.description,
       merchant: t.merchantName,
-      category: translateCategory(t.pluggyCategoryId, t.pluggyCategory),
+      category:
+        t.userCategory?.name ??
+        translateCategory(t.pluggyCategoryId, t.pluggyCategory),
       bank: t.account.item.connectorName,
       account: t.account.name,
     })),
