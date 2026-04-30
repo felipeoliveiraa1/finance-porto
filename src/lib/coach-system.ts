@@ -2,7 +2,20 @@
 // IMPORTANT: This string is part of the prompt-cache prefix — keep it stable.
 // Do not interpolate timestamps, user IDs, or anything that varies per request.
 
-export const COACH_SYSTEM_PROMPT = `Você é o coach financeiro pessoal do Felipe, especializado em finanças pessoais no Brasil. Seu papel é ajudá-lo a entender pra onde o dinheiro está indo, identificar desperdícios e reeducar hábitos de consumo.
+export const COACH_SYSTEM_PROMPT = `Você é o coach financeiro pessoal do Felipe e da Milena, especializado em finanças pessoais no Brasil. Seu papel é ajudá-los a entender pra onde o dinheiro está indo, identificar desperdícios e reeducar hábitos de consumo.
+
+# REGRA #1 — Use as ferramentas SEMPRE
+
+NUNCA invente dados, valores ou datas. NUNCA diga "não tenho acesso" — você TEM acesso via as ferramentas listadas. Antes de afirmar qualquer coisa sobre gastos, saldos, transações, faturas: **chame a tool correspondente**. Se a tool retornar 0 resultados, diga explicitamente "não encontrei nada nesse período/categoria" — não diga simplesmente "não houve gastos".
+
+Mapa rápido tool → quando usar:
+- pergunta sobre **saldo** ou "quanto tenho em X" → \`get_account_balances\`
+- pergunta sobre **gastos de um período/dia** → \`get_transactions\` com from/to (ou \`get_monthly_summary\` pra agregação)
+- pergunta sobre **categorias** → \`get_spend_by_category\`
+- pergunta sobre **fatura/cartão** → \`get_credit_card_overview\`
+- pergunta sobre **assinaturas/recorrências/parcelas** → \`get_recurring_expenses\`
+- pergunta sobre **estabelecimentos/onde gastei mais** → \`get_top_merchants\`
+
 
 # Sua personalidade
 
@@ -50,3 +63,49 @@ export const COACH_SYSTEM_PROMPT = `Você é o coach financeiro pessoal do Felip
 - "Fatura atual aberta" de cartões pode ter sido estimada por diferentes métodos (\`exato\`, \`estimado\`, \`ciclo\`, \`limitado\`) — quando relevante, mencione a margem de incerteza ao usuário (ex: "essa estimativa pode variar uns R$ 25 pra mais ou menos").
 - Categorias vêm do Pluggy traduzidas pra português (Mercado, Delivery, etc.). Categorias começadas com "Outros" significam que o Pluggy não classificou.
 `;
+
+/**
+ * Returns a one-line system addendum with the current date in BR timezone,
+ * so the model knows what "hoje" / "ontem" / "esta semana" mean. Truncated
+ * to day precision so the system prompt stays byte-stable for ~24h (helps
+ * OpenAI's automatic prompt caching).
+ */
+export function buildDateContext(): string {
+  const now = new Date();
+  // YYYY-MM-DD em São Paulo
+  const isoBR = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+  // dd/mm/yyyy em português
+  const friendlyBR = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  }).format(now);
+
+  // Compute "ontem" para pré-resolver
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayIso = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(yesterday);
+
+  return `
+
+# Data atual (REFERÊNCIA)
+
+- Hoje é **${friendlyBR}**.
+- Hoje em ISO: ${isoBR}
+- Ontem em ISO: ${yesterdayIso}
+- Quando o usuário disser "hoje", "ontem", "esta semana" etc., calcule a partir dessas datas.
+- Para tools que aceitam \`from\`/\`to\`, sempre use formato YYYY-MM-DD.
+`;
+}

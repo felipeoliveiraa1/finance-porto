@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
-import { COACH_SYSTEM_PROMPT } from "@/lib/coach-system";
+import { COACH_SYSTEM_PROMPT, buildDateContext } from "@/lib/coach-system";
 import { COACH_TOOLS, executeCoachTool } from "@/lib/coach-tools";
 import { db } from "@/lib/db";
 
@@ -55,7 +55,7 @@ export async function POST(req: Request) {
 
   // 2. Build OpenAI messages array from saved history
   const history: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: COACH_SYSTEM_PROMPT },
+    { role: "system", content: COACH_SYSTEM_PROMPT + buildDateContext() },
     ...conversation.messages.map<OpenAI.Chat.Completions.ChatCompletionMessageParam>((m) =>
       m.role === "assistant"
         ? { role: "assistant", content: m.content }

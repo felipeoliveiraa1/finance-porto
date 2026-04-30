@@ -1,7 +1,7 @@
 import { NextResponse, after } from "next/server";
 import OpenAI from "openai";
 import { db } from "@/lib/db";
-import { COACH_SYSTEM_PROMPT } from "@/lib/coach-system";
+import { COACH_SYSTEM_PROMPT, buildDateContext } from "@/lib/coach-system";
 import { COACH_TOOLS, executeCoachTool } from "@/lib/coach-tools";
 import { jidToPhone, parseAllowedPhones, sendWhatsapp } from "@/lib/whatsapp";
 
@@ -143,9 +143,9 @@ async function handleIncomingMessage(opts: {
     },
   });
 
-  // 3. Build OpenAI messages with WhatsApp-specific addendum.
+  // 3. Build OpenAI messages with WhatsApp-specific addendum + date context.
   const history: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: COACH_SYSTEM_PROMPT + WA_SYSTEM_ADDENDUM },
+    { role: "system", content: COACH_SYSTEM_PROMPT + buildDateContext() + WA_SYSTEM_ADDENDUM },
     ...conversation.messages.map<OpenAI.Chat.Completions.ChatCompletionMessageParam>((m) =>
       m.role === "assistant"
         ? { role: "assistant", content: m.content }

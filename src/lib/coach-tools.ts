@@ -120,6 +120,15 @@ export const COACH_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "get_account_balances",
+      description:
+        "Saldo atual de TODAS as contas (correntes + cartões de crédito). Retorna nome da conta, banco, dono (Felipe ou Milena), tipo (BANK ou CREDIT), saldo atual, e — pra cartões — a fatura aberta + limite disponível. Use sempre que o usuário perguntar sobre saldo, dinheiro disponível, posição de contas, ou quanto tem em qual banco.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_transactions",
       description:
         "Lista até 50 transações individuais filtradas por intervalo, categoria ou conta. Use para análise pontual (ex: 'me mostra os pedidos do iFood do mês', 'quanto eu gastei na Amazon nos últimos 3 meses'). Sempre prefira tools agregadas (summary/category/merchants) antes — só recorra a essa quando precisar ver itens específicos.",
@@ -173,6 +182,8 @@ export async function executeCoachTool(name: string, rawInput: unknown): Promise
         );
       case "get_credit_card_overview":
         return await creditCardOverview();
+      case "get_account_balances":
+        return await accountBalances();
       case "get_transactions":
         return await transactions({
           from: input.from as string | undefined,
@@ -341,6 +352,47 @@ async function topMerchants(fromIso?: string, toIso?: string, limit = 10) {
   }
 
   return { period: { from: isoDay(from), to: isoDay(to) }, merchants };
+}
+
+async function accountBalances() {
+  const accounts = await db.account.findMany({
+    include: { item: { select: { connectorName: true } } },
+    orderBy: [{ type: "asc" }, { balance: "desc" }],
+  });
+  const cards = await getCreditCardUsage();
+  const cardsById = new Map(cards.map((c) => [c.id, c]));
+
+  return {
+    totalBankBalance: round2(
+      accounts.filter((a) => a.type === "BANK").reduce((s, a) => s + a.balance, 0),
+    ),
+    totalCreditOpenBills: round2(
+      cards.reduce((s, c) => s + c.used, 0),
+    ),
+    totalCreditAvailable: round2(
+      cards.reduce((s, c) => s + c.available, 0),
+    ),
+    accounts: accounts.map((a) => {
+      const card = cardsById.get(a.id);
+      const owner = a.owner?.split(/\s+/).slice(0, 2).join(" ") ?? null;
+      return {
+        bank: a.item.connectorName,
+        name: a.name.trim(),
+        type: a.type,
+        subtype: a.subtype,
+        owner,
+        balance: round2(a.balance),
+        ...(card
+          ? {
+              openBill: round2(card.used),
+              creditLimit: round2(card.limit),
+              creditAvailable: round2(card.available),
+              billDueDate: card.billDueDate ? isoDay(new Date(card.billDueDate)) : null,
+            }
+          : {}),
+      };
+    }),
+  };
 }
 
 async function creditCardOverview() {
