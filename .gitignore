@@ -46,3 +46,7 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+# personal spreadsheets used as references (don't commit private data)
+*.xlsx
+*.xls

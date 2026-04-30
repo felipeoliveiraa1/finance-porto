@@ -27,7 +27,12 @@ const BILL_PAYMENT_REGEX =
  *     For each unique purchase (prefix+amount), implied future = (Y - maxX) * amount.
  *  3. Open bill = balance - estimated future installments.
  */
-type OpenBillMethod = "FUTURE_TXS" | "DESCRIPTION_PARSE" | "CYCLE_DATE" | "BALANCE_ONLY";
+type OpenBillMethod =
+  | "MANUAL"
+  | "FUTURE_TXS"
+  | "DESCRIPTION_PARSE"
+  | "CYCLE_DATE"
+  | "BALANCE_ONLY";
 
 async function computeOpenBills(): Promise<
   Map<
@@ -42,7 +47,12 @@ async function computeOpenBills(): Promise<
 > {
   const cards = await db.account.findMany({
     where: { type: "CREDIT" },
-    select: { id: true, balance: true, currentBillDueDate: true },
+    select: {
+      id: true,
+      balance: true,
+      currentBillDueDate: true,
+      manualOpenBill: true,
+    },
   });
   const today = new Date();
   const recentSince = new Date(today);
@@ -54,6 +64,18 @@ async function computeOpenBills(): Promise<
   >();
 
   for (const c of cards) {
+    // Manual override — takes precedence. Set when Pluggy can't compute the
+    // open bill correctly (e.g. Mercado Pago: no installment metadata, so
+    // parcelas of past purchases landing in this bill aren't visible).
+    if (c.manualOpenBill != null) {
+      results.set(c.id, {
+        openBill: c.manualOpenBill,
+        futureInstallments: Math.max(0, c.balance - c.manualOpenBill),
+        method: "MANUAL",
+      });
+      continue;
+    }
+
     // Method 1: future-dated transactions (Itaú-style)
     const futureSum = await db.transaction.aggregate({
       where: { accountId: c.id, type: "DEBIT", date: { gt: today } },
@@ -532,6 +554,10 @@ export async function getCreditCardUsage(opts?: { owner?: string }) {
     // everything as "MeuPluggy" via the meu.pluggy.ai connector).
     const bankKey = detectBankKey(c.name, c.item.connectorName);
     const bankLabel = BANK_LABEL[bankKey];
+    // When the user has set a manualOpenBillDueDate (override scenario), prefer
+    // it over Pluggy's currentBillDueDate — the user is telling us when the
+    // override-amount bill is actually due.
+    const dueDate = c.manualOpenBillDueDate ?? c.currentBillDueDate ?? null;
     return {
       id: c.id,
       name: c.name,
@@ -547,8 +573,10 @@ export async function getCreditCardUsage(opts?: { owner?: string }) {
       limit: c.creditLimit ?? 0,
       available: c.availableCreditLimit ?? 0,
       usedPct: c.creditLimit && c.creditLimit > 0 ? (openBill / c.creditLimit) * 100 : 0,
-      billDueDate: c.currentBillDueDate ?? null,
+      billDueDate: dueDate,
       billMinimum: c.currentBillMinimum ?? null,
+      manualOpenBill: c.manualOpenBill ?? null,
+      manualOpenBillDueDate: c.manualOpenBillDueDate ?? null,
     };
   });
 }
@@ -865,4 +893,77 @@ export async function getCategoriesInScope(
   }
   const categories = [...map.values()].sort((a, b) => b.count - a.count);
   return { categories, totalCount, noCategoryCount };
+}
+
+/**
+ * Manual monthly budget: receitas + despesas fixas + cartões abertos.
+ * Mirrors Milena's spreadsheet — what you expect to enter and leave each month.
+ */
+export async function getMonthlyBudget(): Promise<{
+  incomeSources: { id: string; name: string; amount: number; dueDay: number | null; owner: string | null; notes: string | null }[];
+  fixedExpenses: { id: string; name: string; amount: number; dueDay: number | null; bucket: string | null; owner: string | null; notes: string | null }[];
+  cardBills: { id: string; label: string; amount: number; dueDay: number | null; owner: string | null }[];
+  totals: {
+    income: number;
+    fixed: number;
+    cards: number;
+    leftover: number;
+  };
+}> {
+  const [income, fixed, cards] = await Promise.all([
+    db.incomeSource.findMany({
+      where: { active: true },
+      orderBy: [{ dueDay: "asc" }, { name: "asc" }],
+    }),
+    db.fixedExpense.findMany({
+      where: { active: true },
+      orderBy: [{ dueDay: "asc" }, { name: "asc" }],
+    }),
+    getCreditCardUsage(),
+  ]);
+
+  const incomeSources = income.map((i) => ({
+    id: i.id,
+    name: i.name,
+    amount: i.amount,
+    dueDay: i.dueDay,
+    owner: i.owner,
+    notes: i.notes,
+  }));
+  const fixedExpenses = fixed.map((f) => ({
+    id: f.id,
+    name: f.name,
+    amount: f.amount,
+    dueDay: f.dueDay,
+    bucket: f.bucket,
+    owner: f.owner,
+    notes: f.notes,
+  }));
+
+  const cardBills = cards
+    .filter((c) => c.used > 0)
+    .map((c) => ({
+      id: c.id,
+      label: `${c.bank}${c.owner ? ` · ${c.owner.split(/\s+/)[0]}` : ""}`,
+      amount: c.used,
+      dueDay: c.billDueDate ? new Date(c.billDueDate).getUTCDate() : null,
+      owner: c.owner,
+    }))
+    .sort((a, b) => (a.dueDay ?? 99) - (b.dueDay ?? 99));
+
+  const totalIncome = incomeSources.reduce((s, i) => s + i.amount, 0);
+  const totalFixed = fixedExpenses.reduce((s, f) => s + f.amount, 0);
+  const totalCards = cardBills.reduce((s, c) => s + c.amount, 0);
+
+  return {
+    incomeSources,
+    fixedExpenses,
+    cardBills,
+    totals: {
+      income: totalIncome,
+      fixed: totalFixed,
+      cards: totalCards,
+      leftover: totalIncome - totalFixed - totalCards,
+    },
+  };
 }

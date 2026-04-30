@@ -51,6 +51,12 @@ model Account {
   currentBillAmount    Float?
   currentBillDueDate   DateTime?
   currentBillMinimum   Float?
+  // Manual override for the open bill — used when Pluggy can't reliably tell us
+  // which installment lands in which future bill (Mercado Pago in particular
+  // returns no `paymentData.installmentReferenceDate`). When set, the dashboard
+  // and queries treat this as ground truth and skip the auto-computation.
+  manualOpenBill        Float?
+  manualOpenBillDueDate DateTime?
 
   transactions Transaction[]
 
@@ -148,6 +154,58 @@ model CoachMessage {
   createdAt      DateTime     @default(now())
 
   @@index([conversationId, createdAt])
+}
+
+// Manual monthly budget — mirrors the structure of Milena's spreadsheet
+// (`fatura_compras_MI.xlsx`). Two complementary models:
+//   - FixedExpense: recurring monthly bills (aluguel, escola, mei, etc.)
+//   - IncomeSource: recurring monthly income (salário, autônomo, pensão)
+// Workspace-scoped (shared between Felipe + Milena).
+//
+// We keep these separate from Pluggy `Account` / `Transaction` because they
+// are *plans*, not observations. Reconciliation is a separate concern: we
+// match a paid date or `paid` toggle to incoming transactions later.
+model FixedExpense {
+  id        String  @id @default(cuid())
+  // User-facing label ("Aluguel", "Convênio Helena", "Mei").
+  name      String
+  // Optional Pluggy category ID for cross-linking with auto-categorization.
+  categoryId String?
+  // Optional human category bucket — duplicates Milena's spreadsheet column
+  // ("ALUGUEL", "CONVENIO", "ESCOLA"…). Free-form so she can re-create her
+  // taxonomy without us locking it down.
+  bucket    String?
+  // Monthly amount in BRL.
+  amount    Float
+  // Day of the month the bill is due (1–31). Null when she just tracks it
+  // monthly without a fixed due date.
+  dueDay    Int?
+  // Owner's first name (felipe / milena) — null = shared.
+  owner     String?
+  // Whether this is currently active. Soft-delete pattern so historical
+  // months keep their reference.
+  active    Boolean @default(true)
+  // Optional notes ("varia ~50 a cada mês", "termina em 12/2026").
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active, dueDay])
+}
+
+model IncomeSource {
+  id        String  @id @default(cuid())
+  name      String
+  amount    Float
+  // Expected day of receipt. Null when irregular.
+  dueDay    Int?
+  owner     String?
+  active    Boolean @default(true)
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active])
 }
 
 model SyncLog {

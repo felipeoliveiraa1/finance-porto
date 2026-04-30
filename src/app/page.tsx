@@ -14,6 +14,7 @@ import { KpiCard } from "@/components/kpi-card";
 import { SectionCard } from "@/components/section-card";
 import { SyncButton } from "@/components/sync-button";
 import { CreditCardVisual } from "@/components/credit-card-visual";
+import { CardOverrideButton } from "@/components/card-override-button";
 import {
   DailySpendChart,
   CashflowChart,
@@ -345,26 +346,43 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
             {cards.map((c) => {
               const noBreakdown = c.method === "BALANCE_ONLY";
               const methodLabel =
-                c.method === "FUTURE_TXS"
-                  ? "exato"
-                  : c.method === "DESCRIPTION_PARSE"
-                    ? "estimado"
-                    : c.method === "CYCLE_DATE"
-                      ? "ciclo"
-                      : "limitado";
+                c.method === "MANUAL"
+                  ? "manual"
+                  : c.method === "FUTURE_TXS"
+                    ? "exato"
+                    : c.method === "DESCRIPTION_PARSE"
+                      ? "estimado"
+                      : c.method === "CYCLE_DATE"
+                        ? "ciclo"
+                        : "limitado";
               const methodBadgeClass =
-                c.method === "FUTURE_TXS"
-                  ? "bg-success/15 text-success"
-                  : c.method === "DESCRIPTION_PARSE"
-                    ? "bg-primary/15 text-primary"
-                    : c.method === "CYCLE_DATE"
-                      ? "bg-[rgb(178,100,255)]/15 text-[rgb(178,100,255)]"
-                      : "bg-warning/15 text-warning";
+                c.method === "MANUAL"
+                  ? "bg-warning/15 text-warning ring-1 ring-warning/40"
+                  : c.method === "FUTURE_TXS"
+                    ? "bg-success/15 text-success"
+                    : c.method === "DESCRIPTION_PARSE"
+                      ? "bg-primary/15 text-primary"
+                      : c.method === "CYCLE_DATE"
+                        ? "bg-[rgb(178,100,255)]/15 text-[rgb(178,100,255)]"
+                        : "bg-warning/15 text-warning";
               return (
                 <div
                   key={c.id}
                   className="relative overflow-hidden rounded-2xl glass top-highlight p-4 transition-colors hover:bg-elevated"
                 >
+                  <CardOverrideButton
+                    accountId={c.id}
+                    cardLabel={`${c.bank}${c.owner ? ` · ${c.owner.split(/\s+/)[0]}` : ""}`}
+                    manualOpenBill={c.manualOpenBill}
+                    manualOpenBillDueDate={
+                      c.manualOpenBillDueDate
+                        ? new Date(c.manualOpenBillDueDate).toISOString()
+                        : null
+                    }
+                    defaultDueDate={
+                      c.billDueDate ? new Date(c.billDueDate).toISOString() : null
+                    }
+                  />
                   <CreditCardVisual
                     cardName={c.name}
                     bankConnectorName={c.bank}
