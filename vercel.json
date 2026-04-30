@@ -6,7 +6,8 @@
     "src/app/api/coach/route.ts": { "maxDuration": 60 },
     "src/app/api/webhooks/pluggy/route.ts": { "maxDuration": 60 },
     "src/app/api/webhooks/whatsapp/route.ts": { "maxDuration": 60 },
-    "src/app/api/cron/daily-summary/route.ts": { "maxDuration": 60 }
+    "src/app/api/cron/daily-summary/route.ts": { "maxDuration": 60 },
+    "src/app/api/cron/refresh-items/route.ts": { "maxDuration": 60 }
   },
   "crons": [
     { "path": "/api/cron/daily-summary", "schedule": "0 1 * * *" }
