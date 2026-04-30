@@ -56,6 +56,52 @@ export function formatDateTime(value: Date | string) {
   return dateTime.format(new Date(value));
 }
 
+// Formato curto pra notificações WhatsApp (BRT timezone).
+// Detecta se a transação tem horário real (não meia-noite UTC).
+const dateShortBR = new Intl.DateTimeFormat("pt-BR", {
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: "America/Sao_Paulo",
+});
+const timeBR = new Intl.DateTimeFormat("pt-BR", {
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "America/Sao_Paulo",
+});
+const dateTimeBR = new Intl.DateTimeFormat("pt-BR", {
+  day: "2-digit",
+  month: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "America/Sao_Paulo",
+});
+
+/**
+ * Returns true when the Date has actual hours/minutes set (not just a
+ * date-only value defaulting to midnight UTC).
+ */
+export function hasTimeComponent(d: Date | string): boolean {
+  const date = typeof d === "string" ? new Date(d) : d;
+  return (
+    date.getUTCHours() !== 0 ||
+    date.getUTCMinutes() !== 0 ||
+    date.getUTCSeconds() !== 0 ||
+    date.getUTCMilliseconds() !== 0
+  );
+}
+
+/** "30/04 14:32" if time present, else "30/04" — BRT timezone. */
+export function formatTxDateTime(value: Date | string): string {
+  const d = typeof value === "string" ? new Date(value) : value;
+  return hasTimeComponent(d) ? dateTimeBR.format(d) : dateShortBR.format(d);
+}
+
+/** "14:32" — useful when date is implicit (today's transactions). */
+export function formatTxTimeOnly(value: Date | string): string | null {
+  const d = typeof value === "string" ? new Date(value) : value;
+  return hasTimeComponent(d) ? timeBR.format(d) : null;
+}
+
 export function formatRelative(value: Date | string) {
   const d = new Date(value);
   const diffMs = Date.now() - d.getTime();

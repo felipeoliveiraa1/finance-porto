@@ -5,6 +5,7 @@ import { broadcastWhatsapp, parseReportPhones } from "@/lib/whatsapp";
 import { getCreditCardUsage } from "@/lib/queries";
 import { cleanTransactionDescription, detectBankLabel, formatAccountLabel, shortCardName } from "@/lib/bank";
 import { buildExcludeInternalTransferFilter } from "@/lib/internal-transfer";
+import { formatTxDateTime, formatTxTimeOnly } from "@/lib/format";
 
 export const maxDuration = 60;
 
@@ -137,9 +138,10 @@ async function buildDailySummary(): Promise<string> {
     lines.push("");
     lines.push("*Maiores gastos:*");
     for (const t of todayDebits.slice(0, 3)) {
-      const desc = cleanTransactionDescription(t.description, 32);
+      const desc = cleanTransactionDescription(t.description, 28);
       const bank = detectBankLabel(t.account.name, t.account.item.connectorName);
-      lines.push(`• ${fmt(t.amount)} — ${desc} · ${bank}`);
+      const time = formatTxTimeOnly(t.date);
+      lines.push(`• ${time ? `${time} ` : ""}${fmt(t.amount)} — ${desc} · ${bank}`);
     }
   }
 
@@ -148,9 +150,6 @@ async function buildDailySummary(): Promise<string> {
   if (cards.length > 0) {
     lines.push("");
     lines.push("🏧 *Compras no cartão (48h):*");
-    const dateFmt = (d: Date) =>
-      d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
-
     // Group transactions by accountId
     const byAccount = new Map<string, typeof recentCardDebits>();
     for (const t of recentCardDebits) {
@@ -195,8 +194,8 @@ async function buildDailySummary(): Promise<string> {
       const compraStr = txs.length === 1 ? "compra" : "compras";
       lines.push(`🟢 *${label}* — ${txs.length} ${compraStr} · ${fmt(subtotal)}`);
       for (const t of txs.slice(0, 5)) {
-        const desc = cleanTransactionDescription(t.description, 26);
-        lines.push(`  • ${dateFmt(t.date)} ${fmt(t.amount)} — ${desc}`);
+        const desc = cleanTransactionDescription(t.description, 24);
+        lines.push(`  • ${formatTxDateTime(t.date)} ${fmt(t.amount)} — ${desc}`);
       }
       if (txs.length > 5) {
         lines.push(`  (+${txs.length - 5} compras)`);

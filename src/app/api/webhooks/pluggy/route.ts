@@ -4,6 +4,7 @@ import { syncSingleItem } from "@/lib/sync";
 import { broadcastWhatsapp, parseReportPhones, isWhatsappConfigured } from "@/lib/whatsapp";
 import { cleanTransactionDescription, detectBankLabel } from "@/lib/bank";
 import { buildExcludeInternalTransferFilter } from "@/lib/internal-transfer";
+import { formatTxDateTime, formatTxTimeOnly } from "@/lib/format";
 
 // Pluggy retries 5xx but expects ack within ~30s. We respond fast (200),
 // then run the actual sync in the background via `after()` — which keeps
@@ -136,9 +137,10 @@ export async function POST(req: Request) {
           const sign = tx.type === "DEBIT" ? "-" : "+";
           const desc = cleanTransactionDescription(tx.description, 45);
           const bank = detectBankLabel(tx.account.name, tx.account.item.connectorName);
+          const when = formatTxDateTime(tx.date);
           await broadcastWhatsapp(
             phones,
-            `${arrow} *${sign}${fmt(tx.amount)}* — ${desc}\n${bank} · ${tx.account.name.trim()}`,
+            `${arrow} *${sign}${fmt(tx.amount)}* — ${desc}\n${bank} · ${tx.account.name.trim()}\n_${when}_`,
           );
           return;
         }
@@ -159,8 +161,9 @@ export async function POST(req: Request) {
         lines.push("");
         for (const tx of meaningful.slice(0, 8)) {
           const arrow = tx.type === "DEBIT" ? "−" : "+";
-          const desc = cleanTransactionDescription(tx.description, 28);
-          lines.push(`${arrow}${fmt(tx.amount)} ${desc}`);
+          const desc = cleanTransactionDescription(tx.description, 24);
+          const when = formatTxTimeOnly(tx.date) ?? formatTxDateTime(tx.date);
+          lines.push(`${when} ${arrow}${fmt(tx.amount)} ${desc}`);
         }
         if (meaningful.length > 8) lines.push(`(+${meaningful.length - 8} outras)`);
         if (skipIds.size > 0) lines.push(`\n_${skipIds.size / 2} par${skipIds.size === 2 ? "" : "es"} de transações canceladas (ida + volta) ocultadas._`);
