@@ -80,6 +80,8 @@ export function cleanTransactionDescription(desc: string, maxLen = 35): string {
   cleaned = cleaned
     .replace(/^pix\s+enviado\s+/i, "PIX → ")
     .replace(/^pix\s+recebido\s+/i, "PIX ← ")
+    .replace(/^dev(?:olu[çc][ãa]o)?\s+pix\s+/i, "Devolução PIX ")
+    .replace(/^pix\s+qrs?\s+/i, "PIX QR ")
     .replace(/^pagamento\s+cartao\s+credito\s+/i, "Pgto cartão ")
     .replace(/^pagamento\s+de\s+fatura/i, "Pgto fatura")
     .replace(/^iof\s+(imposto\s+)?/i, "IOF ")

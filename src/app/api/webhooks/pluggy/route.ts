@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { syncSingleItem } from "@/lib/sync";
 import { broadcastWhatsapp, parseReportPhones, isWhatsappConfigured } from "@/lib/whatsapp";
 import { cleanTransactionDescription, detectBankLabel } from "@/lib/bank";
+import { buildExcludeInternalTransferFilter } from "@/lib/internal-transfer";
 
 // Pluggy retries 5xx but expects ack within ~30s. We respond fast (200),
 // then run the actual sync in the background via `after()` — which keeps
@@ -74,8 +75,7 @@ export async function POST(req: Request) {
     after(async () => {
       const start = Date.now();
       try {
-        // Capture which transaction IDs existed BEFORE the sync so we can
-        // detect which ones are new and notify.
+        // Capture existing tx IDs BEFORE the sync to identify what's new.
         const before = await db.transaction.findMany({
           where: { account: { itemId } },
           select: { id: true },
@@ -84,36 +84,88 @@ export async function POST(req: Request) {
 
         const result = await syncSingleItem(itemId);
 
-        const after = await db.transaction.findMany({
+        const internalFilter = await buildExcludeInternalTransferFilter();
+        const newTxs = await db.transaction.findMany({
           where: {
+            ...internalFilter,
             account: { itemId },
             id: { notIn: [...beforeIds] },
           },
-          orderBy: { date: "desc" },
-          take: 5,
-          include: { account: { select: { name: true, item: { select: { connectorName: true } } } } },
+          orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+          include: {
+            account: { select: { name: true, item: { select: { connectorName: true } } } },
+          },
         });
 
-        console.log(
-          `[webhook] sync ok itemId=${itemId} accounts=${result.accounts} transactions=${result.transactions} new=${after.length} (${Date.now() - start}ms)`,
-        );
-
-        // Notify via WhatsApp on each genuinely new transaction.
-        if (after.length > 0 && isWhatsappConfigured()) {
-          const phones = parseReportPhones();
-          if (phones.length > 0) {
-            for (const tx of after) {
-              const fmt = (v: number) =>
-                v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-              const arrow = tx.type === "DEBIT" ? "💸" : "💰";
-              const sign = tx.type === "DEBIT" ? "-" : "+";
-              const desc = cleanTransactionDescription(tx.description, 45);
-              const bank = detectBankLabel(tx.account.name, tx.account.item.connectorName);
-              const msg = `${arrow} *${sign}${fmt(tx.amount)}* — ${desc}\n${bank} · ${tx.account.name.trim()}`;
-              await broadcastWhatsapp(phones, msg);
-            }
+        // Drop "refund pairs": when a DEBIT is matched by an equivalent CREDIT
+        // on the same account on the same day, both notify zero net effect.
+        // This usually happens with PIX QR codes that get reversed (Pagar.me etc).
+        const skipIds = new Set<string>();
+        for (const tx of newTxs) {
+          if (skipIds.has(tx.id)) continue;
+          const counterpart = newTxs.find(
+            (other) =>
+              other.id !== tx.id &&
+              !skipIds.has(other.id) &&
+              other.type !== tx.type &&
+              Math.abs(other.amount - tx.amount) < 0.01 &&
+              Math.abs(other.date.getTime() - tx.date.getTime()) < 48 * 3600 * 1000,
+          );
+          if (counterpart) {
+            skipIds.add(tx.id);
+            skipIds.add(counterpart.id);
           }
         }
+        const meaningful = newTxs.filter((t) => !skipIds.has(t.id));
+
+        console.log(
+          `[webhook] sync ok itemId=${itemId} accounts=${result.accounts} transactions=${result.transactions} new=${newTxs.length} meaningful=${meaningful.length} (${Date.now() - start}ms)`,
+        );
+
+        if (meaningful.length === 0 || !isWhatsappConfigured()) return;
+        const phones = parseReportPhones();
+        if (phones.length === 0) return;
+
+        const fmt = (v: number) =>
+          v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+        if (meaningful.length === 1) {
+          // Single transaction — keep the rich format
+          const tx = meaningful[0];
+          const arrow = tx.type === "DEBIT" ? "💸" : "💰";
+          const sign = tx.type === "DEBIT" ? "-" : "+";
+          const desc = cleanTransactionDescription(tx.description, 45);
+          const bank = detectBankLabel(tx.account.name, tx.account.item.connectorName);
+          await broadcastWhatsapp(
+            phones,
+            `${arrow} *${sign}${fmt(tx.amount)}* — ${desc}\n${bank} · ${tx.account.name.trim()}`,
+          );
+          return;
+        }
+
+        // Multiple → digest. Group by account so user sees what hit each card.
+        const bank = detectBankLabel(meaningful[0].account.name, meaningful[0].account.item.connectorName);
+        const totalDebit = meaningful
+          .filter((t) => t.type === "DEBIT")
+          .reduce((s, t) => s + t.amount, 0);
+        const totalCredit = meaningful
+          .filter((t) => t.type === "CREDIT")
+          .reduce((s, t) => s + t.amount, 0);
+
+        const lines: string[] = [];
+        lines.push(`🔔 *${meaningful.length} novas transações* — ${bank}`);
+        if (totalDebit > 0) lines.push(`💸 Saídas: ${fmt(totalDebit)}`);
+        if (totalCredit > 0) lines.push(`💰 Entradas: ${fmt(totalCredit)}`);
+        lines.push("");
+        for (const tx of meaningful.slice(0, 8)) {
+          const arrow = tx.type === "DEBIT" ? "−" : "+";
+          const desc = cleanTransactionDescription(tx.description, 28);
+          lines.push(`${arrow}${fmt(tx.amount)} ${desc}`);
+        }
+        if (meaningful.length > 8) lines.push(`(+${meaningful.length - 8} outras)`);
+        if (skipIds.size > 0) lines.push(`\n_${skipIds.size / 2} par${skipIds.size === 2 ? "" : "es"} de transações canceladas (ida + volta) ocultadas._`);
+
+        await broadcastWhatsapp(phones, lines.join("\n"));
       } catch (err) {
         console.error(
           `[webhook] sync FAILED itemId=${itemId} (${Date.now() - start}ms)`,
