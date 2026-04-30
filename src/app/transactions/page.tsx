@@ -198,12 +198,20 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
                   </div>
                   <div className="col-span-2 hidden sm:block">
                     {(() => {
-                      const cat = translateCategory(t.pluggyCategoryId, t.pluggyCategory);
-                      return cat ? (
-                        <span className="inline-block rounded-md border border-border bg-secondary/50 px-2 py-0.5 text-[11px] text-muted-foreground">
-                          {cat}
+                      // Prefer the household taxonomy (with emoji) over the
+                      // generic Pluggy translation. Pluggy is the fallback
+                      // for transactions our rules didn't match.
+                      const userCat = t.userCategory;
+                      const cat =
+                        userCat?.name ??
+                        translateCategory(t.pluggyCategoryId, t.pluggyCategory);
+                      if (!cat) return null;
+                      return (
+                        <span className="inline-flex items-center gap-1 rounded-md border border-border bg-secondary/50 px-2 py-0.5 text-[11px] text-muted-foreground">
+                          {userCat?.emoji && <span>{userCat.emoji}</span>}
+                          <span>{cat}</span>
                         </span>
-                      ) : null;
+                      );
                     })()}
                   </div>
                   <div className="col-span-2 text-right">

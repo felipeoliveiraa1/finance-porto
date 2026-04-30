@@ -859,6 +859,7 @@ export async function listTransactions(opts: TransactionFilters & {
       skip: (page - 1) * pageSize,
       take: pageSize,
       include: {
+        userCategory: { select: { name: true, emoji: true } },
         account: {
           select: {
             name: true,
