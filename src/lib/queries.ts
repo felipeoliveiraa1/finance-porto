@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { translateCategory } from "./categories";
 import { detectBankKey, BANK_LABEL, type BankKey } from "./bank";
+import { buildExcludeInternalTransferFilter } from "./internal-transfer";
 
 const RECENT_INSTALLMENT_DAYS = 60;
 // Brazilian credit cards typically close ~9 days before due date
@@ -218,22 +219,23 @@ export async function getOverview(filter?: Filter) {
   const r = resolveRange(filter);
   const prev = previousRange(r);
   const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
+  const internalFilter = await buildExcludeInternalTransferFilter();
 
   const [periodDebits, prevPeriodDebits, periodCredits, prevPeriodCredits] = await Promise.all([
     db.transaction.findMany({
-      where: { ...accountFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
+      where: { ...accountFilter, ...internalFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
       select: { amount: true },
     }),
     db.transaction.findMany({
-      where: { ...accountFilter, date: { gte: prev.from, lte: prev.to }, type: "DEBIT" },
+      where: { ...accountFilter, ...internalFilter, date: { gte: prev.from, lte: prev.to }, type: "DEBIT" },
       select: { amount: true },
     }),
     db.transaction.findMany({
-      where: { ...accountFilter, date: { gte: r.from, lte: r.to }, type: "CREDIT" },
+      where: { ...accountFilter, ...internalFilter, date: { gte: r.from, lte: r.to }, type: "CREDIT" },
       select: { amount: true },
     }),
     db.transaction.findMany({
-      where: { ...accountFilter, date: { gte: prev.from, lte: prev.to }, type: "CREDIT" },
+      where: { ...accountFilter, ...internalFilter, date: { gte: prev.from, lte: prev.to }, type: "CREDIT" },
       select: { amount: true },
     }),
   ]);
@@ -283,8 +285,9 @@ export async function getRecentTransactions(limit = 10) {
 export async function getSpendByCategory(filter?: Filter) {
   const r = resolveRange(filter);
   const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
+  const internalFilter = await buildExcludeInternalTransferFilter();
   const txs = await db.transaction.findMany({
-    where: { ...accountFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
+    where: { ...accountFilter, ...internalFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
     select: {
       amount: true,
       pluggyCategory: true,
@@ -310,8 +313,9 @@ export async function getSpendByCategory(filter?: Filter) {
 export async function getSpendByBank(filter?: Filter) {
   const r = resolveRange(filter);
   const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
+  const internalFilter = await buildExcludeInternalTransferFilter();
   const txs = await db.transaction.findMany({
-    where: { ...accountFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
+    where: { ...accountFilter, ...internalFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
     select: {
       amount: true,
       account: {
@@ -402,8 +406,9 @@ export async function getDailySpendSeries(
     start.setHours(0, 0, 0, 0);
   }
   const accountFilter = opts?.accountId ? { accountId: opts.accountId } : {};
+  const internalFilter = await buildExcludeInternalTransferFilter();
   const txs = await db.transaction.findMany({
-    where: { ...accountFilter, date: { gte: start, lte: end }, type: "DEBIT" },
+    where: { ...accountFilter, ...internalFilter, date: { gte: start, lte: end }, type: "DEBIT" },
     select: { amount: true, date: true },
     orderBy: { date: "asc" },
   });
@@ -424,8 +429,9 @@ export async function getDailySpendSeries(
 export async function getMonthlyCashflowSeries(months = 12, accountId?: string) {
   const start = startOfMonthsAgo(months - 1);
   const accountFilter = accountId ? { accountId } : {};
+  const internalFilter = await buildExcludeInternalTransferFilter();
   const txs = await db.transaction.findMany({
-    where: { ...accountFilter, date: { gte: start } },
+    where: { ...accountFilter, ...internalFilter, date: { gte: start } },
     select: { amount: true, date: true, type: true },
   });
   const series: { month: string; income: number; expense: number; net: number }[] = [];
@@ -452,8 +458,9 @@ export async function getMonthlyCashflowSeries(months = 12, accountId?: string) 
 export async function getTopMerchants(limit = 5, filter?: Filter) {
   const r = resolveRange(filter);
   const accountFilter = filter?.accountId ? { accountId: filter.accountId } : {};
+  const internalFilter = await buildExcludeInternalTransferFilter();
   const txs = await db.transaction.findMany({
-    where: { ...accountFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
+    where: { ...accountFilter, ...internalFilter, date: { gte: r.from, lte: r.to }, type: "DEBIT" },
     select: { amount: true, merchantName: true, description: true },
   });
   const byMerchant = new Map<string, { name: string; total: number; count: number }>();
@@ -617,8 +624,9 @@ export async function getRecurringExpenses(opts?: {
   const since = new Date();
   since.setMonth(since.getMonth() - monthsBack);
 
+  const internalFilter = await buildExcludeInternalTransferFilter();
   const txs = await db.transaction.findMany({
-    where: { type: "DEBIT", date: { gte: since } },
+    where: { ...internalFilter, type: "DEBIT", date: { gte: since } },
     select: {
       merchantName: true,
       description: true,

@@ -6,6 +6,7 @@ import {
   getRecurringExpenses,
   getTopMerchants,
 } from "./queries";
+import { buildExcludeInternalTransferFilter } from "./internal-transfer";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -277,9 +278,10 @@ export async function executeCoachTool(name: string, rawInput: unknown): Promise
 async function getMonthlySummary(monthsBack: number, monthsRange: number) {
   const from = startOfMonth(-monthsBack);
   const to = endOfMonth(-monthsBack + monthsRange - 1);
+  const internalFilter = await buildExcludeInternalTransferFilter();
 
   const txs = await db.transaction.findMany({
-    where: { date: { gte: from, lte: to } },
+    where: { ...internalFilter, date: { gte: from, lte: to } },
     select: {
       amount: true,
       type: true,
@@ -339,10 +341,11 @@ async function getMonthlySummary(monthsBack: number, monthsRange: number) {
 async function spendByCategory(fromIso?: string, toIso?: string) {
   const from = parseDateBoundary(fromIso) ?? startOfMonth();
   const to = parseDateBoundary(toIso, true) ?? new Date();
+  const internalFilter = await buildExcludeInternalTransferFilter();
 
   const grouped = await db.transaction.groupBy({
     by: ["pluggyCategoryId", "pluggyCategory"],
-    where: { type: "DEBIT", date: { gte: from, lte: to } },
+    where: { ...internalFilter, type: "DEBIT", date: { gte: from, lte: to } },
     _sum: { amount: true },
     _count: true,
   });
@@ -393,11 +396,10 @@ async function recurringExpenses() {
 async function topMerchants(fromIso?: string, toIso?: string, limit = 10) {
   const from = parseDateBoundary(fromIso) ?? startOfMonth();
   const to = parseDateBoundary(toIso, true) ?? new Date();
+  const internalFilter = await buildExcludeInternalTransferFilter();
 
-  // Reuse the existing helper when defaults match (current month). Otherwise
-  // run a custom query so the agent can pick any range.
   const txs = await db.transaction.findMany({
-    where: { type: "DEBIT", date: { gte: from, lte: to } },
+    where: { ...internalFilter, type: "DEBIT", date: { gte: from, lte: to } },
     select: { merchantName: true, description: true, amount: true },
   });
 

@@ -4,6 +4,7 @@ import { translateCategory } from "@/lib/categories";
 import { broadcastWhatsapp, parseReportPhones } from "@/lib/whatsapp";
 import { getCreditCardUsage } from "@/lib/queries";
 import { cleanTransactionDescription, detectBankLabel, formatAccountLabel, shortCardName } from "@/lib/bank";
+import { buildExcludeInternalTransferFilter } from "@/lib/internal-transfer";
 
 export const maxDuration = 60;
 
@@ -62,18 +63,19 @@ async function buildDailySummary(): Promise<string> {
 
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 3, 0, 0));
 
+  const internalFilter = await buildExcludeInternalTransferFilter();
   const [todayDebits, yesterdayDebits, monthDebits, cards, recentCardDebits] = await Promise.all([
     db.transaction.findMany({
-      where: { date: { gte: todayStart, lte: todayEnd }, type: "DEBIT" },
+      where: { ...internalFilter, date: { gte: todayStart, lte: todayEnd }, type: "DEBIT" },
       orderBy: { amount: "desc" },
       include: { account: { select: { name: true, item: { select: { connectorName: true } } } } },
     }),
     db.transaction.findMany({
-      where: { date: { gte: yesterdayStart, lte: yesterdayEnd }, type: "DEBIT" },
+      where: { ...internalFilter, date: { gte: yesterdayStart, lte: yesterdayEnd }, type: "DEBIT" },
       select: { amount: true },
     }),
     db.transaction.findMany({
-      where: { date: { gte: monthStart }, type: "DEBIT" },
+      where: { ...internalFilter, date: { gte: monthStart }, type: "DEBIT" },
       select: { amount: true, pluggyCategory: true, pluggyCategoryId: true },
     }),
     getCreditCardUsage(),
