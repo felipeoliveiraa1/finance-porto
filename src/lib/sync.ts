@@ -9,7 +9,14 @@ type SyncResult = {
   errors: { itemId: string; message: string }[];
 };
 
-const FETCH_SINCE_DAYS = 365;
+// Window for the *first* sync of a freshly-linked item — pull a full year so
+// charts/recurring detection have history.
+const FETCH_INITIAL_DAYS = 365;
+// Window for incremental syncs — webhook fires + manual refresh hit this path.
+// 30d catches late-posted card transactions and any backdated entries Pluggy
+// sends after a re-pull, while keeping the request small enough to finish
+// within Vercel's 60s window even with 6 accounts.
+const FETCH_INCREMENTAL_DAYS = 30;
 
 export async function syncAllItems(): Promise<SyncResult> {
   const items = await db.item.findMany({ select: { id: true } });
@@ -59,6 +66,14 @@ export async function syncItems(itemIds: string[]): Promise<SyncResult> {
 
 export async function syncSingleItem(itemId: string): Promise<{ accounts: number; transactions: number }> {
   const pluggy = getPluggyClient();
+
+  // Decide whether this is a first-time seed or an incremental sync. If we've
+  // already ingested any transactions for this item, we only need a small
+  // overlap window — Pluggy will give us anything new and our upsert dedupes.
+  const existingTxCount = await db.transaction.count({
+    where: { account: { itemId } },
+  });
+  const isInitialSync = existingTxCount === 0;
 
   const item = await pluggy.fetchItem(itemId);
 
@@ -142,49 +157,61 @@ export async function syncSingleItem(itemId: string): Promise<{ accounts: number
   }
 
   const since = new Date();
-  since.setDate(since.getDate() - FETCH_SINCE_DAYS);
+  since.setDate(
+    since.getDate() - (isInitialSync ? FETCH_INITIAL_DAYS : FETCH_INCREMENTAL_DAYS),
+  );
 
   let txCount = 0;
+  // Batch upserts in parallel — Postgres + the pgbouncer pooler handle the
+  // concurrency well, and serial upserts blew our 60s Vercel budget on full
+  // syncs (~2k rows). Keep batches small enough that one slow row can't
+  // starve the others.
+  const UPSERT_BATCH_SIZE = 20;
   for (const acc of accounts) {
     const transactions = await pluggy.fetchAllTransactions(acc.id, {
       dateFrom: since.toISOString().slice(0, 10),
     });
-    for (const tx of transactions) {
-      await db.transaction.upsert({
-        where: { id: tx.id },
-        create: {
-          id: tx.id,
-          accountId: acc.id,
-          type: tx.type,
-          description: tx.description,
-          descriptionRaw: tx.descriptionRaw ?? null,
-          amount: Math.abs(tx.amount),
-          amountInAccountCurrency: tx.amountInAccountCurrency ?? null,
-          currencyCode: tx.currencyCode ?? "BRL",
-          date: new Date(tx.date),
-          balance: tx.balance ?? null,
-          pluggyCategory: tx.category ?? null,
-          pluggyCategoryId: tx.categoryId ?? null,
-          merchantName: tx.merchant?.name ?? null,
-          paymentDataJson: tx.paymentData ? JSON.stringify(tx.paymentData) : null,
-          providerCode: tx.providerCode ?? null,
-        },
-        update: {
-          type: tx.type,
-          description: tx.description,
-          descriptionRaw: tx.descriptionRaw ?? null,
-          amount: Math.abs(tx.amount),
-          amountInAccountCurrency: tx.amountInAccountCurrency ?? null,
-          date: new Date(tx.date),
-          balance: tx.balance ?? null,
-          pluggyCategory: tx.category ?? null,
-          pluggyCategoryId: tx.categoryId ?? null,
-          merchantName: tx.merchant?.name ?? null,
-          paymentDataJson: tx.paymentData ? JSON.stringify(tx.paymentData) : null,
-          providerCode: tx.providerCode ?? null,
-        },
-      });
-      txCount += 1;
+    for (let i = 0; i < transactions.length; i += UPSERT_BATCH_SIZE) {
+      const batch = transactions.slice(i, i + UPSERT_BATCH_SIZE);
+      await Promise.all(
+        batch.map((tx) =>
+          db.transaction.upsert({
+            where: { id: tx.id },
+            create: {
+              id: tx.id,
+              accountId: acc.id,
+              type: tx.type,
+              description: tx.description,
+              descriptionRaw: tx.descriptionRaw ?? null,
+              amount: Math.abs(tx.amount),
+              amountInAccountCurrency: tx.amountInAccountCurrency ?? null,
+              currencyCode: tx.currencyCode ?? "BRL",
+              date: new Date(tx.date),
+              balance: tx.balance ?? null,
+              pluggyCategory: tx.category ?? null,
+              pluggyCategoryId: tx.categoryId ?? null,
+              merchantName: tx.merchant?.name ?? null,
+              paymentDataJson: tx.paymentData ? JSON.stringify(tx.paymentData) : null,
+              providerCode: tx.providerCode ?? null,
+            },
+            update: {
+              type: tx.type,
+              description: tx.description,
+              descriptionRaw: tx.descriptionRaw ?? null,
+              amount: Math.abs(tx.amount),
+              amountInAccountCurrency: tx.amountInAccountCurrency ?? null,
+              date: new Date(tx.date),
+              balance: tx.balance ?? null,
+              pluggyCategory: tx.category ?? null,
+              pluggyCategoryId: tx.categoryId ?? null,
+              merchantName: tx.merchant?.name ?? null,
+              paymentDataJson: tx.paymentData ? JSON.stringify(tx.paymentData) : null,
+              providerCode: tx.providerCode ?? null,
+            },
+          }),
+        ),
+      );
+      txCount += batch.length;
     }
   }
 
