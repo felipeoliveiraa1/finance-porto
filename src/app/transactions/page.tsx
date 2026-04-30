@@ -18,6 +18,10 @@ type SearchParams = Promise<{
   categories?: string;
   from?: string;
   to?: string;
+  // Free-text filter — set by drill-downs from the dashboard (Top Merchants etc.).
+  merchant?: string;
+  // Bank filter (Pluggy itemId) — set by Gastos-por-banco drill-down.
+  itemId?: string;
 }>;
 
 const parseDate = (iso?: string, isEndOfDay = false) => {
@@ -39,6 +43,8 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
   const sharedFilters = {
     type: params.type,
     accountId: params.accountId,
+    itemId: params.itemId,
+    merchantContains: params.merchant,
     dateFrom,
     dateTo,
   };
@@ -133,6 +139,36 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
             />
           </div>
         </SectionCard>
+      )}
+
+      {(params.merchant || params.itemId) && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <span className="text-xs uppercase tracking-wider text-primary">Filtro ativo</span>
+          {params.merchant && (
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/15 px-2 py-1 text-xs text-primary">
+              Estabelecimento: <span className="font-semibold">{params.merchant}</span>
+              <Link
+                href={buildHref({ merchant: undefined, page: undefined })}
+                className="ml-1 hover:text-foreground"
+                aria-label="Remover filtro"
+              >
+                ×
+              </Link>
+            </span>
+          )}
+          {params.itemId && (
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/15 px-2 py-1 text-xs text-primary">
+              Banco
+              <Link
+                href={buildHref({ itemId: undefined, page: undefined })}
+                className="ml-1 hover:text-foreground"
+                aria-label="Remover filtro"
+              >
+                ×
+              </Link>
+            </span>
+          )}
+        </div>
       )}
 
       <div className="flex flex-wrap items-center gap-2">

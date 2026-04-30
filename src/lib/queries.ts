@@ -520,6 +520,61 @@ export async function getMonthlyCashflowSeries(
   return series;
 }
 
+// Pull a useful merchant label out of a transaction. Preference order:
+//   1. Pluggy's merchantName when populated
+//   2. Recipient name from PIX/TED/transferência ("PIX ENVIADO Maria Silva" → "Maria Silva")
+//   3. Company from boleto ("PAGAMENTO DE BOLETO OUTROS BANCOS BANCO INTER" → "Boleto · BANCO INTER")
+//   4. First chunk of the description (before double spaces / numbers)
+// Without this, PIX/boleto rows all collapse into a single "PIX ENVIADO" or
+// "PAGAMENTO DE BOLETO" bucket and dominate the Top Merchants chart.
+export function extractMerchantLabel(
+  description: string,
+  merchantName: string | null,
+): string {
+  if (merchantName?.trim()) return merchantName.trim();
+  const desc = description.trim();
+  const desc2 = desc.replace(/\s{2,}/g, " ");
+  const lower = desc2.toLowerCase();
+
+  // PIX → recipient
+  const pixSent = desc2.match(/^pix\s+enviado\s+(.+)/i);
+  if (pixSent) return `PIX → ${cleanRecipient(pixSent[1])}`;
+  const pixReceived = desc2.match(/^pix\s+recebido\s+(.+)/i);
+  if (pixReceived) return `PIX ← ${cleanRecipient(pixReceived[1])}`;
+  const pixQrPart = desc2.match(/^pix\s+qrs?\s+(.+)/i);
+  if (pixQrPart) return `PIX QR · ${cleanRecipient(pixQrPart[1])}`;
+
+  // Boleto → company
+  const boleto = desc2.match(/^pagamento\s+de\s+boleto[^a-z]*(?:outros\s+bancos)?\s*(.+)/i);
+  if (boleto && boleto[1].trim()) return `Boleto · ${cleanRecipient(boleto[1])}`;
+
+  // Transferência enviada
+  const transfer = desc2.match(/^transfer[eê]ncia\s+(?:enviada|recebida)\s*\|?\s*(.+)/i);
+  if (transfer) return `Transferência · ${cleanRecipient(transfer[1])}`;
+
+  // IPVA / impostos públicos
+  if (lower.includes("ipva")) return "IPVA";
+  if (lower.includes("iof")) return "IOF";
+  if (lower.startsWith("anuidade")) return "Anuidade cartão";
+
+  // Fallback: first ~5 words
+  return desc2.split(" ").slice(0, 5).join(" ");
+}
+
+// Strip noise from a recipient/company name fragment: trailing date stamps,
+// CNPJ-ish numbers, and short tail tokens.
+function cleanRecipient(s: string): string {
+  return s
+    .replace(/\d{2}\/\d{2}(?:\/\d{2,4})?/g, "")
+    .replace(/\d{8,}/g, "")
+    .replace(/\bcpf\b.*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .slice(0, 5)
+    .join(" ");
+}
+
 export async function getTopMerchants(limit = 5, filter?: Filter) {
   const r = resolveRange(filter);
   const accountFilter = txAccountWhereFromFilter(filter);
@@ -530,7 +585,7 @@ export async function getTopMerchants(limit = 5, filter?: Filter) {
   });
   const byMerchant = new Map<string, { name: string; total: number; count: number }>();
   for (const t of txs) {
-    const name = t.merchantName ?? t.description.split(/\s{2,}|\s+\d/)[0].trim() ?? "Outros";
+    const name = extractMerchantLabel(t.description, t.merchantName) || "Outros";
     const cur = byMerchant.get(name) ?? { name, total: 0, count: 0 };
     cur.total += t.amount;
     cur.count += 1;
@@ -621,6 +676,11 @@ type TransactionFilters = {
   categoryIds?: string[];
   dateFrom?: Date;
   dateTo?: Date;
+  // Free-text substring matched against description/merchantName (case-insensitive).
+  // Used by Top-Merchants drill-down ("see all transactions for X") on the dashboard.
+  merchantContains?: string;
+  // Filter by Pluggy item (= bank connection). Used by Bank-breakdown drill-down.
+  itemId?: string;
 };
 
 function buildCategoryWhere(ids: string[]) {
@@ -645,12 +705,22 @@ function buildTransactionWhere(opts: TransactionFilters) {
           },
         }
       : {};
+  const merchantFilter = opts.merchantContains
+    ? {
+        OR: [
+          { merchantName: { contains: opts.merchantContains, mode: "insensitive" as const } },
+          { description: { contains: opts.merchantContains, mode: "insensitive" as const } },
+        ],
+      }
+    : {};
   return {
     ...(opts.accountId ? { accountId: opts.accountId } : {}),
+    ...(opts.itemId ? { account: { itemId: opts.itemId } } : {}),
     ...(opts.type ? { type: opts.type } : {}),
     ...(opts.categoryIds && opts.categoryIds.length > 0
       ? buildCategoryWhere(opts.categoryIds)
       : {}),
+    ...merchantFilter,
     ...dateRange,
   };
 }

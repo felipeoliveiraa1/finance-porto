@@ -35,6 +35,7 @@ import {
   getCreditCardUsage,
   getLastSync,
   getOwnerFirstNames,
+  getMonthlyBudget,
 } from "@/lib/queries";
 import { formatBRL, formatDateShort, formatRelative } from "@/lib/format";
 import { DateRangeFilter } from "@/components/date-range-filter";
@@ -120,6 +121,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
     cards,
     lastSync,
     owners,
+    budget,
   ] = await Promise.all([
     getOverview(filter),
     getRecentTransactions(8),
@@ -133,6 +135,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
     getCreditCardUsage({ owner }),
     getLastSync(),
     getOwnerFirstNames(),
+    getMonthlyBudget(),
   ]);
 
   const selectedCard = accountId ? cards.find((c) => c.id === accountId) : null;
@@ -267,6 +270,53 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
         />
       </section>
 
+      {(budget.incomeSources.length > 0 || budget.fixedExpenses.length > 0) && (
+        <SectionCard
+          title={
+            <div className="flex items-center justify-between gap-2">
+              <span>Orçamento do mês</span>
+              <Link
+                href="/fixed"
+                className="text-xs font-medium text-primary hover:text-primary/80"
+              >
+                Editar →
+              </Link>
+            </div>
+          }
+          description="Receitas previstas − Fixos − Cartões = Sobra prevista"
+        >
+          <div className="grid gap-3 sm:grid-cols-4">
+            <BudgetTile
+              label="Receitas previstas"
+              value={budget.totals.income}
+              tone="success"
+              hint={`${budget.incomeSources.length} ${budget.incomeSources.length === 1 ? "fonte" : "fontes"}`}
+            />
+            <BudgetTile
+              label="Fixos do mês"
+              value={budget.totals.fixed}
+              tone="warning"
+              hint={`${budget.fixedExpenses.length} ${budget.fixedExpenses.length === 1 ? "conta" : "contas"}`}
+              negative
+            />
+            <BudgetTile
+              label="Cartões abertos"
+              value={budget.totals.cards}
+              tone="purple"
+              hint={`${budget.cardBills.length} ${budget.cardBills.length === 1 ? "cartão" : "cartões"}`}
+              negative
+            />
+            <BudgetTile
+              label="Sobra prevista"
+              value={budget.totals.leftover}
+              tone={budget.totals.leftover >= 0 ? "success" : "danger"}
+              hint={budget.totals.leftover >= 0 ? "no azul" : "no vermelho"}
+              emphasized
+            />
+          </div>
+        </SectionCard>
+      )}
+
       <section className="grid gap-4 lg:grid-cols-3">
         <SectionCard
           className="lg:col-span-2"
@@ -317,21 +367,35 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
               Sem dados ainda
             </p>
           ) : (
-            <ul className="space-y-3">
-              {merchants.map((m, i) => (
-                <li key={m.name} className="flex items-center gap-3">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-secondary text-xs font-semibold text-muted-foreground">
-                    {i + 1}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{m.name}</p>
-                    <p className="text-xs text-muted-foreground">{m.count} transações</p>
-                  </div>
-                  <span className="text-sm font-semibold tabular-nums text-foreground">
-                    {formatBRL(m.total)}
-                  </span>
-                </li>
-              ))}
+            <ul className="space-y-1">
+              {merchants.map((m, i) => {
+                // Drill-down: extract a stable substring to filter on. PIX/boleto
+                // labels include prefixes like "PIX → " or "Boleto · "; strip them.
+                const term = m.name
+                  .replace(/^(pix\s*[→←]|pix\s*qr\s*·|boleto\s*·|transfer[eê]ncia\s*·)\s*/i, "")
+                  .trim();
+                return (
+                  <li key={m.name}>
+                    <Link
+                      href={`/transactions?merchant=${encodeURIComponent(term)}`}
+                      className="flex items-center gap-3 rounded-lg px-2 py-2 transition hover:bg-white/5"
+                    >
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-secondary text-xs font-semibold text-muted-foreground">
+                        {i + 1}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">{m.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {m.count} {m.count === 1 ? "transação" : "transações"} · ver detalhes →
+                        </p>
+                      </div>
+                      <span className="text-sm font-semibold tabular-nums text-foreground">
+                        {formatBRL(m.total)}
+                      </span>
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </SectionCard>
@@ -563,6 +627,42 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
           )}
         </SectionCard>
       </section>
+    </div>
+  );
+}
+
+function BudgetTile({
+  label,
+  value,
+  hint,
+  tone,
+  negative,
+  emphasized,
+}: {
+  label: string;
+  value: number;
+  hint?: string;
+  tone: "success" | "warning" | "purple" | "danger";
+  negative?: boolean;
+  emphasized?: boolean;
+}) {
+  const toneClass = {
+    success: "text-success",
+    warning: "text-warning",
+    purple: "text-[rgb(178,100,255)]",
+    danger: "text-destructive",
+  }[tone];
+  const ringClass = emphasized ? "ring-1 ring-primary/30" : "";
+  return (
+    <div className={cn("rounded-xl glass top-highlight px-4 py-3", ringClass)}>
+      <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+        {label}
+      </p>
+      <p className={cn("mt-1 text-xl font-semibold tabular-nums", toneClass)}>
+        {negative && value > 0 ? "−" : ""}
+        {formatBRL(value)}
+      </p>
+      {hint && <p className="mt-0.5 text-[11px] text-muted-foreground">{hint}</p>}
     </div>
   );
 }

@@ -2,7 +2,13 @@
 // every item under the same name ("MeuPluggy"), so we infer the real bank from
 // the account/card name.
 
-export type BankKey = "itau" | "nubank" | "santander" | "mercadopago" | "default";
+export type BankKey =
+  | "itau"
+  | "nubank"
+  | "santander"
+  | "mercadopago"
+  | "magalu"
+  | "default";
 
 export function detectBankKey(name: string, fallback?: string): BankKey {
   const s = `${name} ${fallback ?? ""}`.toLowerCase();
@@ -17,6 +23,13 @@ export function detectBankKey(name: string, fallback?: string): BankKey {
   if (s.includes("nubank") || s.includes("nu pagamentos") || /\bgold\b/.test(s))
     return "nubank";
   if (s.includes("santander") || s.includes("elite")) return "santander";
+  if (
+    s.includes("magalu") ||
+    s.includes("magazine luiza") ||
+    s.includes("magazine") ||
+    s.includes("luizacred")
+  )
+    return "magalu";
   return "default";
 }
 
@@ -25,6 +38,7 @@ export const BANK_LABEL: Record<BankKey, string> = {
   nubank: "Nubank",
   santander: "Santander",
   mercadopago: "Mercado Pago",
+  magalu: "Magalu",
   default: "Banco",
 };
 
@@ -54,6 +68,9 @@ export function shortCardName(name: string): string {
     .replace(/^mercado\s*pago\b\s*/i, "")
     .replace(/^mercadolivre\b\s*/i, "")
     .replace(/^banco\s+santander\b\s*/i, "")
+    .replace(/^magazine\s+luiza\b\s*/i, "")
+    .replace(/^magalu\b\s*/i, "")
+    .replace(/^luizacred\b\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
   return capitalize(stripped);

@@ -116,8 +116,14 @@ export function CashflowChart({ data }: { data: { month: string; income: number;
           tickLine={false}
           axisLine={false}
           tickFormatter={(v) => {
-            const [, m] = v.split("-");
-            return ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][Number(m) - 1] ?? v;
+            // v = "YYYY-MM" — show "mai/25" so adjacent months from different
+            // years aren't visually identical when 12 months span a year boundary.
+            const [y, m] = v.split("-");
+            const monthName =
+              ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][
+                Number(m) - 1
+              ] ?? v;
+            return `${monthName}/${y.slice(-2)}`;
           }}
         />
         <YAxis
@@ -229,37 +235,42 @@ export function CategoryDonut({ data }: { data: { name: string; total: number }[
 export function BankBreakdown({
   data,
 }: {
-  data: { name: string; total: number; count: number; color?: string | null }[];
+  data: { id: string; name: string; total: number; count: number; color?: string | null }[];
 }) {
   const total = data.reduce((s, d) => s + d.total, 0);
   return (
-    <ul className="space-y-4">
+    <ul className="space-y-3">
       {data.map((d, i) => {
         const pct = total > 0 ? (d.total / total) * 100 : 0;
         const color = d.color ? `#${d.color}` : NEON_PALETTE[i % NEON_PALETTE.length];
         return (
-          <li key={d.name} className="space-y-1.5">
-            <div className="flex items-center justify-between text-sm">
-              <span className="flex items-center gap-2">
-                <span
-                  className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: color, boxShadow: `0 0 8px ${color}` }}
+          <li key={d.id || d.name}>
+            <a
+              href={`/transactions?itemId=${encodeURIComponent(d.id)}`}
+              className="block space-y-1.5 rounded-lg px-2 py-2 transition hover:bg-white/5"
+            >
+              <div className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-2">
+                  <span
+                    className="h-2 w-2 rounded-full"
+                    style={{ backgroundColor: color, boxShadow: `0 0 8px ${color}` }}
+                  />
+                  <span className="font-medium">{d.name}</span>
+                  <span className="text-xs text-muted-foreground">{d.count}x</span>
+                </span>
+                <span className="font-medium tabular-nums">{formatBRL(d.total)}</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-white/5">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{
+                    width: `${pct}%`,
+                    background: `linear-gradient(90deg, ${color}, ${color}dd)`,
+                    boxShadow: `0 0 12px ${color}88`,
+                  }}
                 />
-                <span className="font-medium">{d.name}</span>
-                <span className="text-xs text-muted-foreground">{d.count}x</span>
-              </span>
-              <span className="font-medium tabular-nums">{formatBRL(d.total)}</span>
-            </div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-white/5">
-              <div
-                className="h-full rounded-full transition-all"
-                style={{
-                  width: `${pct}%`,
-                  background: `linear-gradient(90deg, ${color}, ${color}dd)`,
-                  boxShadow: `0 0 12px ${color}88`,
-                }}
-              />
-            </div>
+              </div>
+            </a>
           </li>
         );
       })}
