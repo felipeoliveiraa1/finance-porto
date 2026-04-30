@@ -129,6 +129,66 @@ export const COACH_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "remember_note",
+      description:
+        "Salva uma anotação de memória de longo prazo sobre o usuário (preferência, meta financeira, limite, contexto pessoal, hábito, etc). Essas notas ficam disponíveis em todas as conversas futuras (via WhatsApp e browser, pra ambos os usuários do workspace). Use quando o usuário compartilhar algo que valha a pena lembrar pra próximas conversas (ex: 'minha meta é juntar 10k até dezembro', 'gosto de pagar tudo via PIX', 'limite informal de R$ 500 em delivery'). NUNCA salve dados sensíveis (CPF, senhas, números de cartão).",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "string",
+            description:
+              "Texto curto e factual da anotação. Em primeira pessoa do usuário sempre que possível. Ex: 'Quer cortar 30% de gastos com delivery'.",
+          },
+          category: {
+            type: "string",
+            enum: ["preference", "goal", "limit", "fact", "context", "habit", "concern"],
+            description:
+              "Tipo da nota: preference=preferência, goal=meta, limit=limite/teto, fact=fato sobre vida do usuário, context=contexto temporário, habit=hábito identificado, concern=preocupação relatada.",
+          },
+          source: {
+            type: "string",
+            description:
+              "Opcional: nome do usuário que disse isso (ex: 'felipe' ou 'milena'). Use quando souber.",
+          },
+        },
+        required: ["content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "recall_notes",
+      description:
+        "Lista as anotações de memória salvas. Já são automaticamente carregadas no início de cada conversa, mas use essa tool quando precisar revisar TUDO que sabe sobre o usuário antes de uma análise mais profunda.",
+      parameters: {
+        type: "object",
+        properties: {
+          category: {
+            type: "string",
+            description: "Filtrar por categoria específica.",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "forget_note",
+      description:
+        "Apaga uma anotação que não vale mais (ex: meta atingida, preferência mudou). Use o ID retornado por recall_notes.",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string", description: "ID da nota a apagar." } },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_transactions",
       description:
         "Lista até 50 transações individuais filtradas por intervalo, categoria ou conta. Use para análise pontual (ex: 'me mostra os pedidos do iFood do mês', 'quanto eu gastei na Amazon nos últimos 3 meses'). Sempre prefira tools agregadas (summary/category/merchants) antes — só recorra a essa quando precisar ver itens específicos.",
@@ -184,6 +244,18 @@ export async function executeCoachTool(name: string, rawInput: unknown): Promise
         return await creditCardOverview();
       case "get_account_balances":
         return await accountBalances();
+      case "remember_note":
+        return await rememberNote({
+          content: String(input.content ?? ""),
+          category: typeof input.category === "string" ? input.category : null,
+          source: typeof input.source === "string" ? input.source : null,
+        });
+      case "recall_notes":
+        return await recallNotes(
+          typeof input.category === "string" ? input.category : undefined,
+        );
+      case "forget_note":
+        return await forgetNote(String(input.id ?? ""));
       case "get_transactions":
         return await transactions({
           from: input.from as string | undefined,
@@ -472,4 +544,96 @@ async function transactions(opts: {
 
 function round2(n: number) {
   return Math.round(n * 100) / 100;
+}
+
+// ─── Memory ──────────────────────────────────────────────────────────────────
+
+async function rememberNote(opts: {
+  content: string;
+  category: string | null;
+  source: string | null;
+}) {
+  const trimmed = opts.content.trim();
+  if (!trimmed) return { error: "content is required" };
+  if (trimmed.length > 600) return { error: "content too long (max 600 chars)" };
+
+  // Avoid storing duplicate notes (same content within 90 days)
+  const recent = await db.coachNote.findFirst({
+    where: {
+      content: trimmed,
+      createdAt: { gte: new Date(Date.now() - 90 * 86400000) },
+    },
+  });
+  if (recent) {
+    return {
+      ok: true,
+      duplicate: true,
+      id: recent.id,
+      message: "Já tinha essa nota salva.",
+    };
+  }
+
+  const note = await db.coachNote.create({
+    data: {
+      content: trimmed,
+      category: opts.category?.trim() || null,
+      source: opts.source?.trim().toLowerCase() || null,
+    },
+  });
+  return {
+    ok: true,
+    id: note.id,
+    category: note.category,
+    content: note.content,
+  };
+}
+
+async function recallNotes(category?: string) {
+  const notes = await db.coachNote.findMany({
+    where: category ? { category } : {},
+    orderBy: { updatedAt: "desc" },
+    take: 50,
+  });
+  return {
+    count: notes.length,
+    notes: notes.map((n) => ({
+      id: n.id,
+      content: n.content,
+      category: n.category,
+      source: n.source,
+      createdAt: n.createdAt.toISOString().slice(0, 10),
+    })),
+  };
+}
+
+async function forgetNote(id: string) {
+  if (!id) return { error: "id required" };
+  const result = await db.coachNote.delete({ where: { id } }).catch(() => null);
+  return result ? { ok: true, deleted: id } : { ok: false, error: "not found" };
+}
+
+/**
+ * Returns a system-prompt-ready string of the user's saved notes. Called at
+ * the start of each chat so the agent already knows the long-term context.
+ */
+export async function loadMemoryContext(): Promise<string> {
+  const notes = await db.coachNote.findMany({
+    orderBy: { updatedAt: "desc" },
+    take: 30,
+  });
+  if (notes.length === 0) return "";
+  const lines = notes.map((n) => {
+    const parts = [n.content];
+    if (n.category) parts.push(`(${n.category})`);
+    if (n.source) parts.push(`[${n.source}]`);
+    return `- ${parts.join(" ")}`;
+  });
+  return `
+
+# Memória de longo prazo (${notes.length} ${notes.length === 1 ? "nota salva" : "notas salvas"})
+
+Use essas anotações como contexto. Pra adicionar/remover use as tools \`remember_note\` / \`forget_note\`.
+
+${lines.join("\n")}
+`;
 }

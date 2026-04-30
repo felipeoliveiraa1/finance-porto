@@ -103,6 +103,22 @@ model Category {
   updatedAt DateTime @updatedAt
 }
 
+// Long-term memory for the AI coach. Workspace-scoped (shared between Felipe
+// and Milena, including across browser + WhatsApp). The coach reads these on
+// every turn so it remembers preferences, goals and facts across conversations.
+model CoachNote {
+  id        String   @id @default(cuid())
+  // Free-form bucket: "preference", "goal", "fact", "limit", "context", etc.
+  category  String?
+  content   String
+  // Optional reference to who said it ("felipe" / "milena") — null = anyone.
+  source    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([updatedAt(sort: Desc)])
+}
+
 model Conversation {
   id            String         @id @default(cuid())
   title         String         @default("Nova conversa")
